@@ -1,0 +1,111 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="API documentation for the Rust `staticweaver` crate."><title>staticweaver - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-46f98efaafac5295.ttf.woff2,FiraSans-Regular-018c141bf0843ffd.woff2,FiraSans-Medium-8f9a781e4970d388.woff2,SourceCodePro-Regular-562dcc5011b6de7d.ttf.woff2,SourceCodePro-Semibold-d899c5a5c4aeb14a.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-76eba96aa4d2e634.css"><link rel="stylesheet" href="../static.files/rustdoc-b0742ba02757f159.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="staticweaver" data-themes="" data-resource-suffix="" data-rustdoc-version="1.84.0-nightly (798fb83f7 2024-10-16)" data-channel="nightly" data-search-js="search-e056c65ede92db13.js" data-settings-js="settings-805db61a62df4bd2.js" ><script src="../static.files/storage-1d39b6787ed640ff.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-f070b9041d14864c.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-0111fcff984fae8f.css"></noscript><link rel="icon" href="https://kura.pro/staticweaver/images/favicon.ico"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button><a class="logo-container" href="../staticweaver/index.html"><img src="https://kura.pro/staticweaver/images/logos/staticweaver.svg" alt=""></a></nav><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../staticweaver/index.html"><img src="https://kura.pro/staticweaver/images/logos/staticweaver.svg" alt="logo"></a><h2><a href="../staticweaver/index.html">staticweaver</a><span class="version">0.0.1</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#staticweaver" title="`StaticWeaver`"><code>StaticWeaver</code></a><ul><li><a href="#overview" title="Overview">Overview</a></li><li><a href="#features" title="Features">Features</a></li><li><a href="#installation" title="Installation">Installation</a></li><li><a href="#usage" title="Usage">Usage</a></li><li><a href="#documentation" title="Documentation">Documentation</a></li><li><a href="#examples" title="Examples">Examples</a></li><li><a href="#contributing" title="Contributing">Contributing</a></li><li><a href="#license" title="License">License</a></li><li><a href="#acknowledgements" title="Acknowledgements">Acknowledgements</a></li></ul></li></ul><h3><a href="#reexports">Crate Items</a></h3><ul class="block"><li><a href="#reexports" title="Re-exports">Re-exports</a></li><li><a href="#modules" title="Modules">Modules</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>staticweaver</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/staticweaver/lib.rs.html#6-36">source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><!-- markdownlint-disable MD033 MD041 -->
+<p><img src="https://kura.pro/staticweaver/images/logos/staticweaver.svg"
+alt="StaticWeaver logo" height="66" align="right" /></p>
+<!-- markdownlint-enable MD033 MD041 -->
+<h2 id="staticweaver"><a class="doc-anchor" href="#staticweaver">§</a><code>StaticWeaver</code></h2>
+<p>A fast and flexible templating engine for Rust applications.</p>
+<!-- markdownlint-disable MD033 MD041 -->
+<center>
+<!-- markdownlint-enable MD033 MD041 -->
+<p><a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/rust-f04041?style=for-the-badge&amp;labelColor=c0282d&amp;logo=rust" alt="Made With Love" /></a> <a href="https://crates.io/crates/staticweaver"><img src="https://img.shields.io/crates/v/staticweaver.svg?style=for-the-badge&amp;color=fc8d62&amp;logo=rust" alt="Crates.io" /></a> <a href="https://lib.rs/crates/staticweaver"><img src="https://img.shields.io/badge/lib.rs-v0.0.1-orange.svg?style=for-the-badge" alt="lib.rs" /></a> <a href="https://docs.rs/staticweaver"><img src="https://img.shields.io/badge/docs.rs-staticweaver-66c2a5?style=for-the-badge&amp;labelColor=555555&amp;logo=docs.rs" alt="Docs.rs" /></a> <a href="https://codecov.io/gh/sebastienrousseau/staticweaver"><img src="https://img.shields.io/codecov/c/github/sebastienrousseau/staticweaver?style=for-the-badge&amp;token=psbZ8MASWj&amp;logo=codecov" alt="Codecov" /></a> <a href="https://github.com/sebastienrousseau/staticweaver/actions?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/sebastienrousseau/staticweaver/release.yml?branch=main&amp;style=for-the-badge&amp;logo=github" alt="Build Status" /></a> <a href="https://github.com/sebastienrousseau/staticweaver"><img src="https://img.shields.io/badge/github-sebastienrousseau/staticweaver-8da0cb?style=for-the-badge&amp;labelColor=555555&amp;logo=github" alt="GitHub" /></a></p>
+<p>• <a href="https://staticweaver.com">Website</a> • <a href="https://docs.rs/staticweaver">Documentation</a> • <a href="https://github.com/sebastienrousseau/staticweaver/issues">Report Bug</a> • <a href="https://github.com/sebastienrousseau/staticweaver/issues">Request Feature</a> • <a href="https://github.com/sebastienrousseau/staticweaver/blob/main/CONTRIBUTING.md">Contributing Guidelines</a></p>
+<!-- markdownlint-disable MD033 MD041 -->
+</center>
+<!-- markdownlint-enable MD033 MD041 -->
+<h3 id="overview"><a class="doc-anchor" href="#overview">§</a>Overview</h3>
+<p><code>staticweaver</code> is a robust Rust library that provides a flexible and powerful templating engine. Designed for static site generation and more, it offers advanced caching, remote template support, and customizable rendering for optimized performance.</p>
+<h3 id="features"><a class="doc-anchor" href="#features">§</a>Features</h3>
+<ul>
+<li><strong>Flexible Template Rendering:</strong> Ideal for static sites, web apps, and other use cases.</li>
+<li><strong>Dynamic Content:</strong> Easily interpolate variables in templates with a powerful context system.</li>
+<li><strong>File and String Templates:</strong> Render templates from both files and strings.</li>
+<li><strong>Advanced Caching:</strong> Improve performance by caching templates for repeated use.</li>
+<li><strong>Custom Rendering:</strong> Modify and extend the rendering process to fit your needs.</li>
+<li><strong>Remote Template Support:</strong> Fetch and render templates from URLs.</li>
+<li><strong>Comprehensive Error Handling:</strong> Gracefully manage template rendering errors.</li>
+</ul>
+<h3 id="installation"><a class="doc-anchor" href="#installation">§</a>Installation</h3>
+<p>Add <code>staticweaver</code> to your <code>Cargo.toml</code>:</p>
+<div class="example-wrap"><pre class="language-toml"><code>[dependencies]
+staticweaver = &quot;0.0.1&quot;</code></pre></div><h3 id="usage"><a class="doc-anchor" href="#usage">§</a>Usage</h3>
+<p>Here’s a basic example of how to use <code>staticweaver</code>:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::fs;
+<span class="kw">use </span>staticweaver::engine::Engine;
+<span class="kw">use </span>staticweaver::EngineError;
+<span class="kw">use </span>staticweaver::error::TemplateError;
+<span class="kw">use </span>staticweaver::context::Context;
+<span class="kw">use </span>std::time::Duration;
+<span class="kw">use </span>std::path::Path;
+
+<span class="kw">fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;(), TemplateError&gt; {
+    <span class="comment">// Create the 'examples' directory and 'template.html' for the test
+    </span>fs::create_dir_all(<span class="string">"examples"</span>)<span class="question-mark">?</span>;
+    fs::write(<span class="string">"examples/template.html"</span>, <span class="string">r#"
+    &lt;!DOCTYPE html&gt;
+    &lt;html&gt;
+    &lt;head&gt;&lt;title&gt;{{title}}&lt;/title&gt;&lt;/head&gt;
+    &lt;body&gt;&lt;h1&gt;{{title}}&lt;/h1&gt;&lt;p&gt;{{content}}&lt;/p&gt;&lt;/body&gt;
+    &lt;/html&gt;"#</span>)<span class="question-mark">?</span>;
+
+    <span class="comment">// Create a new engine with a template path and cache duration
+    </span><span class="kw">let </span><span class="kw-2">mut </span>engine = Engine::new(<span class="string">"examples"</span>, Duration::from_secs(<span class="number">60</span>));
+
+    <span class="comment">// Create a context with some variables
+    </span><span class="kw">let </span><span class="kw-2">mut </span>context = Context::new();
+    context.set(<span class="string">"title"</span>.to_string(), <span class="string">"Welcome to StaticWeaver"</span>.to_string());
+    context.set(<span class="string">"content"</span>.to_string(), <span class="string">"This is a simple example."</span>.to_string());
+
+    <span class="comment">// Render the 'template.html', mapping EngineError to TemplateError
+    </span><span class="kw">let </span>rendered = engine
+        .render_page(<span class="kw-2">&amp;</span>context, <span class="string">"template"</span>)
+        .map_err(|e| TemplateError::EngineError(Box::new(EngineError::Render(<span class="macro">format!</span>(<span class="string">"Rendering failed: {:?}"</span>, e)))))<span class="question-mark">?</span>;
+
+    <span class="comment">// Output the rendered content to 'rendered.html'
+    </span>fs::write(<span class="string">"examples/rendered.html"</span>, <span class="kw-2">&amp;</span>rendered)<span class="question-mark">?</span>;
+
+    <span class="macro">println!</span>(<span class="string">"Rendered content written to 'examples/rendered.html'."</span>);
+
+    <span class="comment">// Clean up: remove files and directory
+    </span>remove_dir_contents(<span class="string">"examples"</span>)<span class="question-mark">?</span>;
+
+    <span class="macro">println!</span>(<span class="string">"Template and rendered files cleaned up."</span>);
+
+    <span class="prelude-val">Ok</span>(())
+}
+
+<span class="comment">// Helper function to remove all files inside a directory
+</span><span class="kw">fn </span>remove_dir_contents(dir: <span class="kw-2">&amp;</span>str) -&gt; std::io::Result&lt;()&gt; {
+    <span class="kw">let </span>path = Path::new(dir);
+    <span class="kw">if </span>path.is_dir() {
+        <span class="kw">for </span>entry <span class="kw">in </span>fs::read_dir(path)<span class="question-mark">? </span>{
+            <span class="kw">let </span>entry = entry<span class="question-mark">?</span>;
+            <span class="kw">let </span>entry_path = entry.path();
+            <span class="kw">if </span>entry_path.is_file() {
+                fs::remove_file(entry_path)<span class="question-mark">?</span>;
+            } <span class="kw">else if </span>entry_path.is_dir() {
+                fs::remove_dir_all(entry_path)<span class="question-mark">?</span>; <span class="comment">// If there are subdirectories, remove them recursively
+            </span>}
+        }
+        fs::remove_dir(path)<span class="question-mark">?</span>; <span class="comment">// Finally, remove the directory itself
+    </span>}
+    <span class="prelude-val">Ok</span>(())
+}</code></pre></div>
+<p>This example demonstrates rendering a template named “page”, replacing <code>{{title}}</code> and <code>{{content}}</code> with values from the context.</p>
+<h3 id="documentation"><a class="doc-anchor" href="#documentation">§</a>Documentation</h3>
+<p>For full API documentation, please visit <a href="https://docs.rs/staticweaver">docs.rs/staticweaver</a>.</p>
+<h3 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h3>
+<p>To explore more examples, clone the repository and run the following command:</p>
+<div class="example-wrap"><pre class="language-shell"><code>cargo run --example example_name</code></pre></div><h3 id="contributing"><a class="doc-anchor" href="#contributing">§</a>Contributing</h3>
+<p>Contributions are welcome! Please feel free to submit a Pull Request.</p>
+<h3 id="license"><a class="doc-anchor" href="#license">§</a>License</h3>
+<p>This project is licensed under either of</p>
+<ul>
+<li><a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License, Version 2.0</a></li>
+<li><a href="https://opensource.org/licenses/MIT">MIT license</a></li>
+</ul>
+<p>at your option.</p>
+<h3 id="acknowledgements"><a class="doc-anchor" href="#acknowledgements">§</a>Acknowledgements</h3>
+<p>Special thanks to all contributors who have helped build the <code>staticweaver</code> library.</p>
+</div></details><h2 id="reexports" class="section-header">Re-exports<a href="#reexports" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name" id="reexport.Context"><code>pub use context::<a class="struct" href="context/struct.Context.html" title="struct staticweaver::context::Context">Context</a>;</code></div></li><li><div class="item-name" id="reexport.Engine"><code>pub use engine::<a class="struct" href="engine/struct.Engine.html" title="struct staticweaver::engine::Engine">Engine</a>;</code></div></li><li><div class="item-name" id="reexport.PageOptions"><code>pub use engine::<a class="struct" href="engine/struct.PageOptions.html" title="struct staticweaver::engine::PageOptions">PageOptions</a>;</code></div></li><li><div class="item-name" id="reexport.EngineError"><code>pub use error::<a class="enum" href="error/enum.EngineError.html" title="enum staticweaver::error::EngineError">EngineError</a>;</code></div></li><li><div class="item-name" id="reexport.TemplateError"><code>pub use error::<a class="enum" href="error/enum.TemplateError.html" title="enum staticweaver::error::TemplateError">TemplateError</a>;</code></div></li></ul><h2 id="modules" class="section-header">Modules<a href="#modules" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="mod" href="cache/index.html" title="mod staticweaver::cache">cache</a></div><div class="desc docblock-short">Implements caching mechanisms for improved performance.</div></li><li><div class="item-name"><a class="mod" href="context/index.html" title="mod staticweaver::context">context</a></div><div class="desc docblock-short">Contains the <code>Context</code> struct for managing template variables.</div></li><li><div class="item-name"><a class="mod" href="engine/index.html" title="mod staticweaver::engine">engine</a></div><div class="desc docblock-short">Provides the <code>Engine</code> struct for template rendering.</div></li><li><div class="item-name"><a class="mod" href="error/index.html" title="mod staticweaver::error">error</a></div><div class="desc docblock-short">Defines error types for template processing.
+Error types for the StaticWeaver library.</div></li><li><div class="item-name"><a class="mod" href="prelude/index.html" title="mod staticweaver::prelude">prelude</a></div><div class="desc docblock-short">Prelude module for convenient imports</div></li></ul></section></div></main></body></html>
