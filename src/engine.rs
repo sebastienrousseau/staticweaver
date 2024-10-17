@@ -203,8 +203,8 @@ impl Engine {
         let template_content = fs::read_to_string(&template_path)?;
 
         // Render the template with the provided context
-        let rendered =
-            self.render_template(&template_content, &context.elements)?;
+        let context_elements: HashMap<_, _> = context.elements.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let rendered = self.render_template(&template_content, &context_elements)?;
 
         // Cache the rendered result for future use
         let _ = self.render_cache.insert(cache_key, rendered.clone());

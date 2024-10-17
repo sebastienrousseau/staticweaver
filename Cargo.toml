@@ -80,6 +80,8 @@ criterion = "0.5"                           # Benchmarking library to test perfo
 [dependencies]
 # Required dependencies for building and running the project.
 
+fnv = "1.0"                                 # Fast non-cryptographic hash function
+
 # regex is used for regular expression support in the template engine.
 regex = "1.11"
 
