@@ -1,21 +1,22 @@
 // Copyright © 2024 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-// src/cache.rs
-
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
 /// Represents a cached item with its value and expiration time.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CachedItem<T> {
     value: T,
     expiration: Instant,
 }
 
-/// A simple cache implementation with expiration.
-#[derive(Debug)]
+/// A simple cache implementation with expiration and optional capacity limit.
+///
+/// This cache provides time-based expiration for items and an optional maximum capacity.
+/// It's designed to be generic over both key and value types for maximum flexibility.
+#[derive(Debug, Clone)]
 pub struct Cache<K, V> {
     items: HashMap<K, CachedItem<V>>,
     ttl: Duration,
@@ -29,6 +30,10 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     ///
     /// * `ttl` - The time-to-live for cached items.
     ///
+    /// # Panics
+    ///
+    /// Panics if `ttl` is zero.
+    ///
     /// # Example
     ///
     /// ```
@@ -39,14 +44,62 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// ```
     #[must_use]
     pub fn new(ttl: Duration) -> Self {
-        Cache {
+        assert!(!ttl.is_zero(), "TTL must be greater than zero");
+        Self {
             items: HashMap::new(),
             ttl,
             capacity: None,
         }
     }
 
+    /// Returns an iterator over the key-value pairs in the cache.
+    ///
+    /// # Returns
+    ///
+    /// An iterator over the key-value pairs in the cache.
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        let now = Instant::now();
+        self.items.iter().filter_map(move |(k, item)| {
+            if item.expiration > now {
+                Some((k, &item.value))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Creates a new Cache with the specified TTL and initial capacity.
+    ///
+    /// # Arguments
+    ///
+    /// * `ttl` - The time-to-live for cached items.
+    /// * `capacity` - The initial capacity of the cache.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ttl` is zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let cache: Cache<String, String> = Cache::with_capacity(Duration::from_secs(60), 100);
+    /// ```
+    #[must_use]
+    pub fn with_capacity(ttl: Duration, capacity: usize) -> Self {
+        assert!(!ttl.is_zero(), "TTL must be greater than zero");
+        Self {
+            items: HashMap::with_capacity(capacity),
+            ttl,
+            capacity: Some(capacity),
+        }
+    }
+
     /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache is at capacity and the key doesn't already exist, the new item won't be inserted.
     ///
     /// # Arguments
     ///
@@ -120,7 +173,7 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
         self.items.retain(|_, item| item.expiration > now);
     }
 
-    /// Checks if a key exists in the cache without updating its expiration.
+    /// Checks if a key exists in the cache and hasn't expired.
     ///
     /// # Arguments
     ///
@@ -166,6 +219,39 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// `true` if the item was found and refreshed, `false` otherwise.
     pub fn refresh(&mut self, key: &K) -> bool {
         if let Some(item) = self.items.get_mut(key) {
+            item.expiration = Instant::now() + self.ttl;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Removes a key-value pair from the cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to remove.
+    ///
+    /// # Returns
+    ///
+    /// The removed value if the key was present, or `None` otherwise.
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self.items.remove(key).map(|item| item.value)
+    }
+
+    /// Updates the value for an existing key in the cache.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to update.
+    /// * `value` - The new value to set.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the key was found and updated, `false` otherwise.
+    pub fn update(&mut self, key: &K, value: V) -> bool {
+        if let Some(item) = self.items.get_mut(key) {
+            item.value = value;
             item.expiration = Instant::now() + self.ttl;
             true
         } else {
@@ -225,13 +311,19 @@ impl<K: Hash + Eq, V: Clone> IntoIterator for Cache<K, V> {
     }
 }
 
-impl<K, V> Default for Cache<K, V> {
+impl<K: Hash + Eq, V: Clone> Default for Cache<K, V> {
     fn default() -> Self {
-        Cache {
-            items: HashMap::new(),
-            ttl: Duration::from_secs(60),
-            capacity: None,
+        Self::new(Duration::from_secs(60))
+    }
+}
+
+impl<K: Hash + Eq, V: Clone> FromIterator<(K, V)> for Cache<K, V> {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut cache = Self::default();
+        for (k, v) in iter {
+            let _ = cache.insert(k, v);
         }
+        cache
     }
 }
 
@@ -250,14 +342,16 @@ mod tests {
 
     #[test]
     fn test_insert_and_get() {
-        let mut cache = Cache::new(Duration::from_secs(60));
+        let mut cache: Cache<String, i32> =
+            Cache::new(Duration::from_secs(60));
         assert_eq!(cache.insert("key1".to_string(), 42), None);
         assert_eq!(cache.get(&"key1".to_string()), Some(&42));
     }
 
     #[test]
     fn test_insert_overwrite() {
-        let mut cache = Cache::new(Duration::from_secs(60));
+        let mut cache: Cache<String, i32> =
+            Cache::new(Duration::from_secs(60));
         let _ = cache.insert("key1".to_string(), 42);
         assert_eq!(cache.insert("key1".to_string(), 43), Some(42));
         assert_eq!(cache.get(&"key1".to_string()), Some(&43));
@@ -333,7 +427,8 @@ mod tests {
 
     #[test]
     fn test_large_cache() {
-        let mut cache = Cache::new(Duration::from_secs(60));
+        let mut cache: Cache<String, i32> =
+            Cache::new(Duration::from_secs(60));
         for i in 0..1000 {
             let _ = cache.insert(i.to_string(), i);
         }
@@ -345,21 +440,38 @@ mod tests {
 
     #[test]
     fn test_set_capacity() {
-        let mut cache = Cache::new(Duration::from_secs(60));
+        let mut cache: Cache<String, String> =
+            Cache::new(Duration::from_secs(60));
         cache.set_capacity(2);
 
-        assert_eq!(cache.insert("key1".to_string(), 1), None);
-        assert_eq!(cache.insert("key2".to_string(), 2), None);
-        assert_eq!(cache.insert("key3".to_string(), 3), None); // This should not be inserted
+        assert_eq!(
+            cache.insert("key1".to_string(), "1".to_string()),
+            None
+        );
+        assert_eq!(
+            cache.insert("key2".to_string(), "2".to_string()),
+            None
+        );
+        assert_eq!(
+            cache.insert("key3".to_string(), "3".to_string()),
+            None
+        );
 
-        assert_eq!(cache.get(&"key1".to_string()), Some(&1));
-        assert_eq!(cache.get(&"key2".to_string()), Some(&2));
+        assert_eq!(
+            cache.get(&"key1".to_string()),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            cache.get(&"key2".to_string()),
+            Some(&"2".to_string())
+        );
         assert_eq!(cache.get(&"key3".to_string()), None);
     }
 
     #[test]
     fn test_clear() {
-        let mut cache = Cache::new(Duration::from_secs(60));
+        let mut cache: Cache<String, i32> =
+            Cache::new(Duration::from_secs(60));
         let _ = cache.insert("key1".to_string(), 1);
         let _ = cache.insert("key2".to_string(), 2);
 
@@ -370,5 +482,84 @@ mod tests {
 
         assert_eq!(cache.get(&"key1".to_string()), None);
         assert_eq!(cache.get(&"key2".to_string()), None);
+    }
+
+    #[test]
+    fn test_remove() {
+        let mut cache: Cache<String, String> =
+            Cache::new(Duration::from_secs(60));
+        let _ = cache.insert("key1".to_string(), "value1".to_string());
+
+        assert_eq!(
+            cache.remove(&"key1".to_string()),
+            Some("value1".to_string())
+        );
+        assert_eq!(cache.remove(&"key1".to_string()), None);
+    }
+
+    #[test]
+    fn test_update() {
+        let mut cache: Cache<String, String> =
+            Cache::new(Duration::from_secs(60));
+        let _ = cache.insert("key1".to_string(), "value1".to_string());
+
+        assert!(cache.update(&"key1".to_string(), "value2".to_string()));
+        assert_eq!(
+            cache.get(&"key1".to_string()),
+            Some(&"value2".to_string())
+        );
+
+        assert!(
+            !cache.update(&"key2".to_string(), "value3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_capacity() {
+        let mut cache: Cache<String, String> =
+            Cache::new(Duration::from_secs(60));
+        assert_eq!(cache.capacity, None);
+
+        cache.set_capacity(100);
+        assert_eq!(cache.capacity, Some(100));
+    }
+
+    #[test]
+    fn test_iter() {
+        let mut cache = Cache::new(Duration::from_millis(100));
+        let _ = cache.insert("key1".to_string(), "value1".to_string());
+        let _ = cache.insert("key2".to_string(), "value2".to_string());
+
+        let items: Vec<(&String, &String)> = cache.iter().collect();
+        assert_eq!(items.len(), 2);
+
+        sleep(Duration::from_millis(150));
+
+        let items: Vec<(&String, &String)> = cache.iter().collect();
+        assert_eq!(items.len(), 0);
+    }
+
+    #[test]
+    fn test_from_iterator() {
+        let items = vec![
+            ("key1".to_string(), "value1".to_string()),
+            ("key2".to_string(), "value2".to_string()),
+        ];
+        let cache: Cache<String, String> = items.into_iter().collect();
+        assert_eq!(
+            cache.get(&"key1".to_string()),
+            Some(&"value1".to_string())
+        );
+        assert_eq!(
+            cache.get(&"key2".to_string()),
+            Some(&"value2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_with_capacity() {
+        let cache: Cache<String, String> =
+            Cache::with_capacity(Duration::from_secs(60), 100);
+        assert!(cache.items.capacity() >= 100);
     }
 }

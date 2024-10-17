@@ -11,25 +11,26 @@
 )]
 #![crate_name = "staticweaver"]
 #![crate_type = "lib"]
+#![deny(missing_docs)]
+#![warn(rustdoc::missing_crate_level_docs)]
 
-/// The `context` module contains the `Context` struct, which is used to store and manage template variables.
+/// Contains the `Context` struct for managing template variables.
 pub mod context;
 
-/// The `engine` module contains the `Engine` struct, which is used to render templates.
+/// Provides the `Engine` struct for template rendering.
 pub mod engine;
 
-/// The `error` module contains the `TemplateError` enum, which represents errors that can occur during template processing.
+/// Defines error types for template processing.
 pub mod error;
 
-/// The `cache` module contains the `Cache` struct, which is used to cache rendered templates for improved performance.
+/// Implements caching mechanisms for improved performance.
 pub mod cache;
 
 pub use context::Context;
 pub use engine::{Engine, PageOptions};
-pub use error::EngineError;
-pub use error::TemplateError;
+pub use error::{EngineError, TemplateError};
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::{Context, Engine, TemplateError};
+    pub use crate::{Context, Engine, EngineError, TemplateError};
 }

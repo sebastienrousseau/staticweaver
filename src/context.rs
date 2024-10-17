@@ -1,39 +1,39 @@
 // Copyright © 2024 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-// src/context.rs
+//! # Context Module
+//!
+//! This module provides the `Context` struct, which is used to store and manage
+//! key-value pairs for template rendering. It offers a flexible and efficient way
+//! to handle template variables and their values.
 
+use fnv::FnvHashMap;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::ops::{Deref, DerefMut};
 
 /// Represents the context for template rendering.
 ///
 /// `Context` holds key-value pairs that can be used to populate
-/// placeholders in a template during the rendering process.
+/// placeholders in a template during the rendering process. It uses
+/// `FnvHashMap` for efficient string-based key lookups.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::Context;
+///
+/// let mut context = Context::new();
+/// context.set("name".to_string(), "Alice".to_string());
+/// assert_eq!(context.get("name"), Some(&"Alice".to_string()));
+/// ```
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Context {
     /// The internal storage for context key-value pairs.
-    pub elements: HashMap<String, String>,
+    elements: FnvHashMap<String, String>,
 }
 
 impl Context {
-    /// Computes a hash of the context.
-    ///
-    /// This method is used for caching purposes.
-    ///
-    /// # Returns
-    ///
-    /// A `u64` representing the hash of the context.
-    pub(crate) fn hash(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        for (key, value) in &self.elements {
-            key.hash(&mut hasher);
-            value.hash(&mut hasher);
-        }
-        hasher.finish()
-    }
-
     /// Creates a new, empty `Context`.
     ///
     /// # Examples
@@ -42,13 +42,60 @@ impl Context {
     /// use staticweaver::Context;
     ///
     /// let context = Context::new();
-    /// assert!(context.elements.is_empty());
+    /// assert!(context.is_empty());
     /// ```
     #[must_use]
-    pub fn new() -> Context {
-        Context {
-            elements: HashMap::new(),
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a new `Context` with the specified capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let context = Context::with_capacity(10);
+    /// assert!(context.is_empty());
+    /// assert!(context.capacity() >= 10);
+    /// ```
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            elements: FnvHashMap::with_capacity_and_hasher(
+                capacity,
+                Default::default(),
+            ),
         }
+    }
+
+    /// Computes a hash of the context.
+    ///
+    /// This method is used for caching purposes. It creates a stable hash
+    /// based on the current state of the context.
+    ///
+    /// # Returns
+    ///
+    /// A `u64` representing the hash of the context.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let mut context = Context::new();
+    /// context.set("key".to_string(), "value".to_string());
+    /// let hash = context.hash();
+    /// assert_ne!(hash, 0);
+    /// ```
+    pub fn hash(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for (key, value) in &self.elements {
+            key.hash(&mut hasher);
+            value.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     /// Sets a key-value pair in the context.
@@ -66,10 +113,9 @@ impl Context {
     /// use staticweaver::Context;
     ///
     /// let mut context = Context::new();
-    /// context.set("name".to_string(), "Alice".to_string()); // Corrected to use String
+    /// context.set("name".to_string(), "Alice".to_string());
     /// assert_eq!(context.get("name"), Some(&"Alice".to_string()));
     /// ```
-    ///
     pub fn set(&mut self, key: String, value: String) {
         let _ = self.elements.insert(key, value);
     }
@@ -98,6 +144,33 @@ impl Context {
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&String> {
         self.elements.get(key)
+    }
+
+    /// Retrieves a mutable reference to the value associated with a key from the context.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to look up.
+    ///
+    /// # Returns
+    ///
+    /// An `Option` containing a mutable reference to the value if the key exists,
+    /// or `None` if it doesn't.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let mut context = Context::new();
+    /// context.set("name".to_string(), "Bob".to_string());
+    /// if let Some(value) = context.get_mut("name") {
+    ///     *value = "Alice".to_string();
+    /// }
+    /// assert_eq!(context.get("name"), Some(&"Alice".to_string()));
+    /// ```
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut String> {
+        self.elements.get_mut(key)
     }
 
     /// Removes a key-value pair from the context.
@@ -138,6 +211,21 @@ impl Context {
     #[must_use]
     pub fn len(&self) -> usize {
         self.elements.len()
+    }
+
+    /// Returns the number of elements the context can hold without reallocating.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let context = Context::with_capacity(10);
+    /// assert!(context.capacity() >= 10);
+    /// ```
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.elements.capacity()
     }
 
     /// Returns true if the context contains no elements.
@@ -191,17 +279,95 @@ impl Context {
     pub fn clear(&mut self) {
         self.elements.clear();
     }
+
+    /// Updates an existing key with a new value or inserts it if it doesn't exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to update or insert.
+    /// * `value` - The new value to associate with the key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let mut context = Context::new();
+    /// context.set("key".to_string(), "old_value".to_string());
+    /// context.update("key", "new_value");
+    /// assert_eq!(context.get("key"), Some(&"new_value".to_string()));
+    /// ```
+    pub fn update<K, V>(&mut self, key: K, value: V)
+    where
+        K: Into<String>,
+        V: Into<String>,
+    {
+        let _ = self.elements.insert(key.into(), value.into());
+    }
 }
 
 impl FromIterator<(String, String)> for Context {
+    /// Creates a `Context` from an iterator of key-value pairs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let pairs = vec![
+    ///     ("key1".to_string(), "value1".to_string()),
+    ///     ("key2".to_string(), "value2".to_string()),
+    /// ];
+    /// let context: Context = pairs.into_iter().collect();
+    /// assert_eq!(context.get("key1"), Some(&"value1".to_string()));
+    /// assert_eq!(context.get("key2"), Some(&"value2".to_string()));
+    /// ```
     fn from_iter<I: IntoIterator<Item = (String, String)>>(
         iter: I,
     ) -> Self {
         let mut context = Context::new();
-        for (key, value) in iter {
-            context.set(key, value);
-        }
+        context.extend(iter);
         context
+    }
+}
+
+impl Extend<(String, String)> for Context {
+    /// Extends the context with the contents of the specified iterator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let mut context = Context::new();
+    /// context.extend(vec![
+    ///     ("key1".to_string(), "value1".to_string()),
+    ///     ("key2".to_string(), "value2".to_string()),
+    /// ]);
+    /// assert_eq!(context.get("key1"), Some(&"value1".to_string()));
+    /// assert_eq!(context.get("key2"), Some(&"value2".to_string()));
+    /// ```
+    fn extend<T: IntoIterator<Item = (String, String)>>(
+        &mut self,
+        iter: T,
+    ) {
+        for (key, value) in iter {
+            self.set(key, value);
+        }
+    }
+}
+
+impl Deref for Context {
+    type Target = FnvHashMap<String, String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.elements
+    }
+}
+
+impl DerefMut for Context {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.elements
     }
 }
 
@@ -216,10 +382,26 @@ mod tests {
     }
 
     #[test]
+    fn test_with_capacity() {
+        let context = Context::with_capacity(10);
+        assert!(context.capacity() >= 10);
+    }
+
+    #[test]
     fn test_set_and_get() {
         let mut context = Context::new();
         context.set("key".to_string(), "value".to_string());
         assert_eq!(context.get("key"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_get_mut() {
+        let mut context = Context::new();
+        context.set("key".to_string(), "value".to_string());
+        if let Some(value) = context.get_mut("key") {
+            *value = "new_value".to_string();
+        }
+        assert_eq!(context.get("key"), Some(&"new_value".to_string()));
     }
 
     #[test]
@@ -256,6 +438,17 @@ mod tests {
     }
 
     #[test]
+    fn test_extend() {
+        let mut context = Context::new();
+        context.extend(vec![
+            ("key1".to_string(), "value1".to_string()),
+            ("key2".to_string(), "value2".to_string()),
+        ]);
+        assert_eq!(context.get("key1"), Some(&"value1".to_string()));
+        assert_eq!(context.get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
     fn test_iter() {
         let mut context = Context::new();
         context.set("key1".to_string(), "value1".to_string());
@@ -283,5 +476,35 @@ mod tests {
 
         context.clear();
         assert!(context.is_empty());
+    }
+
+    #[test]
+    fn test_deref() {
+        let mut context = Context::new();
+        context.set("key".to_string(), "value".to_string());
+        assert_eq!(context["key"], "value");
+    }
+
+    #[test]
+    fn test_deref_mut() {
+        let mut context = Context::new();
+        context.set("key".to_string(), "value".to_string());
+
+        // Use the entry API to modify the value
+        let _ = context
+            .entry("key".to_string())
+            .and_modify(|val| *val = "new_value".to_string());
+
+        assert_eq!(context.get("key"), Some(&"new_value".to_string()));
+    }
+
+    #[test]
+    fn test_update() {
+        let mut context = Context::new();
+        context.set("key".to_string(), "value".to_string());
+
+        context.update("key", "new_value");
+
+        assert_eq!(context.get("key"), Some(&"new_value".to_string()));
     }
 }

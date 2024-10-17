@@ -1,3 +1,7 @@
+// Copyright © 2024 StaticWeaver. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+use staticweaver::EngineError;
 use staticweaver::TemplateError;
 
 /// Unit tests for TemplateError variants and their behaviour.
@@ -30,8 +34,12 @@ mod template_error_tests {
     /// This test checks if the `InvalidSyntax` error is correctly represented.
     #[test]
     fn test_template_error_invalid_syntax() {
-        let template_error = TemplateError::InvalidSyntax;
-        assert!(matches!(template_error, TemplateError::InvalidSyntax));
+        let template_error =
+            TemplateError::InvalidSyntax("Unclosed tag".to_string());
+        assert!(matches!(
+            template_error,
+            TemplateError::InvalidSyntax(_)
+        ));
     }
 
     /// Test the `RenderError` variant of the `TemplateError` enum.
@@ -119,8 +127,8 @@ mod additional_template_error_tests {
     #[test]
     fn test_template_error_unreachable() {
         let result: Result<(), TemplateError> =
-            Err(TemplateError::InvalidSyntax);
-        assert!(matches!(result, Err(TemplateError::InvalidSyntax)));
+            Err(TemplateError::InvalidSyntax("Test".to_string()));
+        assert!(matches!(result, Err(TemplateError::InvalidSyntax(_))));
     }
 
     /// Test conversion consistency between different types of errors.
@@ -140,5 +148,14 @@ mod additional_template_error_tests {
             reqwest_template_error,
             TemplateError::Reqwest(_)
         ));
+    }
+
+    /// Test conversion from TemplateError to EngineError
+    #[test]
+    fn test_template_error_to_engine_error() {
+        let template_error =
+            TemplateError::InvalidSyntax("Test".to_string());
+        let engine_error: EngineError = template_error.into();
+        assert!(matches!(engine_error, EngineError::Template(_)));
     }
 }

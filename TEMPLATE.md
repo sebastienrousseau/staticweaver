@@ -5,7 +5,7 @@ alt="StaticWeaver logo" height="66" align="right" />
 
 # `StaticWeaver`
 
-A flexible and powerful templating engine for Rust applications.
+A fast and flexible templating engine for Rust applications.
 
 <!-- markdownlint-disable MD033 MD041 -->
 <center>
@@ -21,20 +21,17 @@ A flexible and powerful templating engine for Rust applications.
 
 ## Overview
 
-`staticweaver` is a robust Rust library that provides a flexible and powerful templating engine. Designed with flexibility in mind, it’s perfect for static site generators, but its capabilities extend to any project that requires template rendering, such as web applications, code generation tools, and report generators.
-
-Unlike other templating libraries, `StaticWeaver` offers advanced caching mechanisms, remote template support, and customizable rendering, making it the ideal choice for performance-conscious applications.
+`staticweaver` is a robust Rust library that provides a flexible and powerful templating engine. Designed for static site generation and more, it offers advanced caching, remote template support, and customizable rendering for optimized performance.
 
 ## Features
 
-- **Versatile Template Rendering**: Supports static site generation, web apps, and more.
-- **Variable Interpolation**: Easily replace placeholders in templates with dynamic content.
-- **Context System**: Flexibly manage variables and dynamic content in templates using an intuitive context system.
-- **File and String-Based Templates**: Render templates from both files and string literals, allowing for flexibility in template management.
-- **Error Handling**: Comprehensive error handling that ensures graceful recovery from template errors.
-- **Caching**: Integrated template caching improves performance by reducing file I/O during repeated renders.
-- **Customizable Rendering**: Easily extend or modify the rendering process to meet custom requirements.
-- **Remote Template Support**: Fetch templates from URLs for distributed or dynamically updated template sources.
+- **Flexible Template Rendering:** Ideal for static sites, web apps, and other use cases.
+- **Dynamic Content:** Easily interpolate variables in templates with a powerful context system.
+- **File and String Templates:** Render templates from both files and strings.
+- **Advanced Caching:** Improve performance by caching templates for repeated use.
+- **Custom Rendering:** Modify and extend the rendering process to fit your needs.
+- **Remote Template Support:** Fetch and render templates from URLs.
+- **Comprehensive Error Handling:** Gracefully manage template rendering errors.
 
 [00]: https://staticweaver.com
 [01]: https://lib.rs/crates/staticweaver
@@ -48,7 +45,7 @@ Unlike other templating libraries, `StaticWeaver` offers advanced caching mechan
 [09]: https://github.com/sebastienrousseau/staticweaver
 
 [build-badge]: https://img.shields.io/github/actions/workflow/status/sebastienrousseau/staticweaver/release.yml?branch=main&style=for-the-badge&logo=github
-[codecov-badge]: https://img.shields.io/codecov/c/github/sebastienrousseau/staticweaver?style=for-the-badge&token=OOnQTi8yIQ&logo=codecov
+[codecov-badge]: https://img.shields.io/codecov/c/github/sebastienrousseau/staticweaver?style=for-the-badge&token=psbZ8MASWj&logo=codecov
 [crates-badge]: https://img.shields.io/crates/v/staticweaver.svg?style=for-the-badge&color=fc8d62&logo=rust
 [docs-badge]: https://img.shields.io/badge/docs.rs-staticweaver-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs
 [github-badge]: https://img.shields.io/badge/github-sebastienrousseau/staticweaver-8da0cb?style=for-the-badge&labelColor=555555&logo=github

@@ -80,6 +80,8 @@ criterion = "0.5"                           # Benchmarking library to test perfo
 [dependencies]
 # Required dependencies for building and running the project.
 
+fnv = "1.0"                                 # Fast non-cryptographic hash function
+
 # regex is used for regular expression support in the template engine.
 regex = "1.11"
 
@@ -103,20 +105,38 @@ thiserror = "1.0"
 # -----------------------------------------------------------------------------
 # Examples
 # -----------------------------------------------------------------------------
-# [[example]]
-# Example code demonstrating the library in use.
+[[example]]
+# Example code demonstrating the cache functionality.
+name = "cache_example"                  # Name of the example
+path = "examples/cache_example.rs"      # Path to the example code
+
+[[example]]
+# Example code demonstrating the context functionality.
+name = "context_example"                # Name of the example
+path = "examples/context_example.rs"    # Path to the example code
+
+[[example]]
+# Example code demonstrating the engine functionality.
+name = "engine_example"                 # Name of the example
+path = "examples/engine_example.rs"     # Path to the example code
+
+[[example]]
+# Example code demonstrating the error handling functionality.
+name = "error_example"                  # Name of the example
+path = "examples/error_example.rs"      # Path to the example code
+
+[[example]]
+# Example code demonstrating the library functionality.
+name = "lib_example"                    # Name of the example
+path = "examples/lib_example.rs"        # Path to the example code
 
 # -----------------------------------------------------------------------------
 # Criterion Benchmark
 # -----------------------------------------------------------------------------
-# [[bench]]
-# # Benchmarking configuration for performance testing.
-# name = "server_benchmark"                   # Name of the benchmark
-# harness = false                             # Disable the default benchmark harness (used by Criterion)
-
-# [profile.bench]
-# # Profile used when running benchmarks.
-# debug = true                                # Include debug symbols for better diagnostics
+[[bench]]
+# Benchmarking configuration for performance testing.
+name = "template_benchmark"                   # Name of the benchmark
+harness = false                             # Disable the default benchmark harness (used by Criterion)
 
 # -----------------------------------------------------------------------------
 # Documentation Configuration

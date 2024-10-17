@@ -1,24 +1,25 @@
 // Copyright © 2024 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-// src/engine.rs
-
-//! # Template Rendering Engine
+//! # Engine Module
 //!
-//! This module provides a template rendering engine with caching capabilities.
-//! It supports rendering templates from files or strings, with context-based
-//! variable substitution.
+//! This module provides the core functionality for the StaticWeaver templating engine.
+//! It includes the `Engine` struct for rendering templates and the `PageOptions` struct
+//! for configuring page rendering options.
 
 use crate::cache::Cache;
-use crate::Context;
-use std::collections::HashMap;
+use crate::context::Context;
+use fnv::FnvHashMap;
+use reqwest;
 use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::tempdir;
+use thiserror::Error;
 
 /// Error types specific to the engine operations.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum EngineError {
     /// I/O related errors.
     #[error("I/O error: {0}")]
@@ -40,12 +41,12 @@ pub enum EngineError {
 /// Options for rendering a page template.
 ///
 /// This struct contains the options for rendering a page template.
-/// These options are used to construct a context `HashMap` that is
+/// These options are used to construct a context `FnvHashMap` that is
 /// passed to the `render_template` function.
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct PageOptions {
     /// Elements of the page
-    pub elements: HashMap<String, String>,
+    pub elements: FnvHashMap<String, String>,
 }
 
 impl PageOptions {
@@ -60,10 +61,8 @@ impl PageOptions {
     /// assert!(options.elements.is_empty());
     /// ```
     #[must_use]
-    pub fn new() -> PageOptions {
-        PageOptions {
-            elements: HashMap::new(),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Sets a page option in the `elements` map.
@@ -114,7 +113,7 @@ impl PageOptions {
 }
 
 /// The main template rendering engine.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Engine {
     /// Path to the template directory.
     pub template_path: String,
@@ -154,10 +153,6 @@ impl Engine {
 
     /// Renders a page using the specified layout and context, with caching.
     ///
-    /// This method retrieves the template for the specified layout, applies the provided context for
-    /// rendering, and caches the result for future requests. If the template has been previously cached,
-    /// the cached result is returned to improve performance.
-    ///
     /// # Arguments
     ///
     /// * `context` - The rendering context, which includes key-value pairs for variable substitution.
@@ -170,9 +165,9 @@ impl Engine {
     /// # Errors
     ///
     /// This function can return the following errors:
-    /// - `EngineError::Io`: If reading the template file from disk fails (e.g., file not found).
-    /// - `EngineError::Render`: If an error occurs during the rendering process (e.g., unresolved template tags).
-    /// - `EngineError::InvalidTemplate`: If the template contains syntax errors (e.g., unclosed tags).
+    /// - `EngineError::Io`: If reading the template file from disk fails.
+    /// - `EngineError::Render`: If an error occurs during the rendering process.
+    /// - `EngineError::InvalidTemplate`: If the template contains syntax errors.
     ///
     /// # Examples
     ///
@@ -204,7 +199,7 @@ impl Engine {
 
         // Render the template with the provided context
         let rendered =
-            self.render_template(&template_content, &context.elements)?;
+            self.render_template(&template_content, context)?;
 
         // Cache the rendered result for future use
         let _ = self.render_cache.insert(cache_key, rendered.clone());
@@ -214,57 +209,40 @@ impl Engine {
 
     /// Renders a template string with the given context and custom delimiters.
     ///
-    /// This method takes a template string and a context (key-value pairs) and replaces
-    /// any template tags found within the string with the corresponding values from the
-    /// context. The template tags are defined by the opening and closing delimiters,
-    /// which can be customized using the `set_delimiters` method. If a template tag
-    /// cannot be resolved (i.e., the key does not exist in the context), an error is returned.
-    ///
-    /// The method also ensures that all template tags are properly closed, otherwise,
-    /// it returns an error for invalid template syntax.
-    ///
     /// # Arguments
     ///
     /// * `template` - The template string containing the tags to be replaced.
-    /// * `context` - A `HashMap` containing the key-value pairs to use for substitution.
+    /// * `context` - A `Context` containing the key-value pairs to use for substitution.
     ///
     /// # Returns
     ///
-    /// A `Result` containing the rendered string or an `EngineError` if an error occurs
-    /// (e.g., unresolved template tag, invalid template syntax).
+    /// A `Result` containing the rendered string or an `EngineError` if an error occurs.
     ///
     /// # Errors
     ///
     /// * `EngineError::InvalidTemplate` - If the template contains unclosed tags or is empty.
     /// * `EngineError::Render` - If a template tag cannot be resolved from the context.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// use staticweaver::engine::Engine;
-    /// use std::collections::HashMap;
+    /// use staticweaver::Context;
     /// use std::time::Duration;
     ///
-    /// let mut engine = Engine::new("templates", Duration::from_secs(3600));
-    /// engine.set_delimiters("<<", ">>");
+    /// let engine = Engine::new("templates", Duration::from_secs(3600));
+    /// let mut context = Context::new();
+    /// context.set("greeting".to_string(), "Hello".to_string());
+    /// context.set("name".to_string(), "Alice".to_string());
     ///
-    /// let mut context = HashMap::new();
-    /// context.insert("greeting".to_string(), "Hello".to_string());
-    /// context.insert("name".to_string(), "Alice".to_string());
-    ///
-    /// let template = "<<greeting>>, <<name>>!";
+    /// let template = "{{greeting}}, {{name}}!";
     /// let result = engine.render_template(template, &context).unwrap();
     /// assert_eq!(result, "Hello, Alice!");
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// This method will panic if the delimiters are not properly set or if the template
-    /// contains unmatched delimiters.
     pub fn render_template(
         &self,
         template: &str,
-        context: &HashMap<String, String>,
+        context: &Context,
     ) -> Result<String, EngineError> {
         if template.trim().is_empty() {
             return Err(EngineError::InvalidTemplate(
@@ -321,32 +299,19 @@ impl Engine {
 
     /// Sets custom delimiters for the template tags.
     ///
-    /// This method allows you to define custom delimiters for the opening and closing
-    /// tags in your templates. By default, the delimiters are `{{` for the opening tag
-    /// and `}}` for the closing tag, but this method allows you to change them to any
-    /// other strings. This can be useful when the default delimiters conflict with the
-    /// content of your templates.
-    ///
     /// # Arguments
     ///
     /// * `open` - The string to use as the opening delimiter (e.g., `<<`).
     /// * `close` - The string to use as the closing delimiter (e.g., `>>`).
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// use staticweaver::engine::Engine;
     /// use std::time::Duration;
     ///
     /// let mut engine = Engine::new("templates", Duration::from_secs(3600));
-    ///
-    /// // Set custom delimiters
     /// engine.set_delimiters("<<", ">>");
-    ///
-    /// // Now you can use the new delimiters in templates:
-    /// let context = std::collections::HashMap::new();
-    /// let template = "<<greeting>>, <<name>>!";
-    /// let result = engine.render_template(template, &context);
     /// ```
     pub fn set_delimiters(&mut self, open: &str, close: &str) {
         self.open_delim = open.to_string();
@@ -354,10 +319,6 @@ impl Engine {
     }
 
     /// Creates or uses an existing template folder.
-    ///
-    /// This function checks if the template folder exists at the specified path. If a valid path is provided,
-    /// it will check if the folder exists locally or download files from the given URL. If no path is provided,
-    /// it uses a default URL to download the template folder.
     ///
     /// # Arguments
     ///
@@ -370,8 +331,8 @@ impl Engine {
     /// # Errors
     ///
     /// This function can return the following errors:
-    /// - `EngineError::Io`: If there is an issue with file operations (e.g., template directory not found, invalid UTF-8).
-    /// - `EngineError::Reqwest`: If there is an issue downloading files from a URL (e.g., network request failure).
+    /// - `EngineError::Io`: If there is an issue with file operations.
+    /// - `EngineError::Reqwest`: If there is an issue downloading files from a URL.
     ///
     /// # Examples
     ///
@@ -478,14 +439,13 @@ impl Engine {
         let file_path = dir.join(file);
 
         let client = reqwest::blocking::Client::new();
-        let mut response = client
+        let response = client
             .get(&file_url)
             .timeout(Duration::from_secs(10)) // Set a timeout
             .send()?;
 
         // Check if the response status is not a success (200-299)
         if !response.status().is_success() {
-            // Return a custom error instead of trying to construct reqwest::Error
             return Err(EngineError::Render(format!(
                 "Failed to download {}: HTTP {}",
                 file,
@@ -495,7 +455,8 @@ impl Engine {
 
         // Proceed with file saving if the response is successful
         let mut file = File::create(&file_path)?;
-        let _ = response.copy_to(&mut file)?;
+        let content = response.text()?;
+        file.write_all(content.as_bytes())?;
 
         Ok(())
     }
@@ -506,7 +467,7 @@ impl Engine {
     /// After calling this, subsequent render requests will not retrieve
     /// any cached results and will regenerate the templates.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// use staticweaver::engine::Engine;
@@ -531,7 +492,7 @@ impl Engine {
     ///
     /// * `max_size` - The maximum number of cache entries allowed before the cache is cleared.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// use staticweaver::engine::Engine;
@@ -565,15 +526,15 @@ fn is_url(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use crate::Context;
 
     #[test]
     fn test_render_template() {
         let mut engine = Engine::new("", Duration::from_secs(60));
         engine.set_delimiters("<<", ">>");
-        let mut context = HashMap::new();
-        let _ = context.insert("name".to_string(), "Alice".to_string());
-        let _ = context.insert("greeting".to_string(), "Hello".to_string());
+        let mut context = Context::new();
+        context.set("name".to_string(), "Alice".to_string());
+        context.set("greeting".to_string(), "Hello".to_string());
 
         let template = "<<greeting>>, <<name>>!";
         let result =
@@ -584,7 +545,7 @@ mod tests {
     #[test]
     fn test_render_template_empty() {
         let engine = Engine::new("", Duration::from_secs(60));
-        let context = HashMap::new();
+        let context = Context::new();
 
         let template = "";
         let result = engine.render_template(template, &context);
@@ -595,7 +556,7 @@ mod tests {
     fn test_render_template_invalid_syntax() {
         let mut engine = Engine::new("", Duration::from_secs(60));
         engine.set_delimiters("{{", "}}"); // Set back to default delimiters
-        let context = HashMap::new();
+        let context = Context::new();
         let template = "Hello, {name}!";
         let result = engine.render_template(template, &context);
         assert!(
@@ -607,9 +568,9 @@ mod tests {
     fn test_render_template_custom_delimiters() {
         let mut engine = Engine::new("", Duration::from_secs(60));
         engine.set_delimiters("<<", ">>");
-        let mut context = HashMap::new();
-        let _ = context.insert("name".to_string(), "Alice".to_string());
-        let _ = context.insert("greeting".to_string(), "Hello".to_string());
+        let mut context = Context::new();
+        context.set("name".to_string(), "Alice".to_string());
+        context.set("greeting".to_string(), "Hello".to_string());
 
         let template = "<<greeting>>, <<name>>!";
         let result =
@@ -627,7 +588,7 @@ mod tests {
     #[test]
     fn test_render_template_unresolved_tag() {
         let engine = Engine::new("", Duration::from_secs(60));
-        let context = HashMap::new();
+        let context = Context::new();
 
         let template = "Hello, {{name}}!";
         let result = engine.render_template(template, &context);
@@ -643,22 +604,59 @@ mod tests {
     }
 
     #[test]
-    fn test_render_template_escaped_delimiters() {
-        let mut engine = Engine::new("", Duration::from_secs(60));
-        engine.set_delimiters("{{", "}}");
-        let mut context = HashMap::new();
-        let _ = context.insert("name".to_string(), "Alice".to_string());
+    fn test_page_options() {
+        let mut options = PageOptions::new();
+        options.set("title".to_string(), "My Page".to_string());
+        assert_eq!(options.get("title"), Some(&"My Page".to_string()));
+        assert_eq!(options.get("non_existent"), None);
+    }
 
-        // Escaped delimiters should render as literal delimiters
-        let template = "Hello, {{name}}!";
-        let result =
-            engine.render_template(template, &context).unwrap();
-        assert_eq!(result, "Hello, Alice!");
+    #[test]
+    fn test_render_page() {
+        use std::fs;
+        use tempfile::TempDir;
 
-        // Mixed usage: escaped and actual template tag
-        let template = "Hello, {{name}}! Welcome, {{name}}!";
-        let result =
-            engine.render_template(template, &context).unwrap();
-        assert_eq!(result, "Hello, Alice! Welcome, Alice!");
+        let temp_dir = TempDir::new().unwrap();
+        let template_path = temp_dir.path().join("template.html");
+        fs::write(&template_path, "Hello, {{name}}!").unwrap();
+
+        let mut engine = Engine::new(
+            temp_dir.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let mut context = Context::new();
+        context.set("name".to_string(), "World".to_string());
+
+        let result = engine.render_page(&context, "template").unwrap();
+        assert_eq!(result, "Hello, World!");
+    }
+
+    #[test]
+    fn test_clear_cache() {
+        let mut engine =
+            Engine::new("templates", Duration::from_secs(3600));
+        let _ = engine
+            .render_cache
+            .insert("key1".to_string(), "value1".to_string());
+        assert!(!engine.render_cache.is_empty());
+
+        engine.clear_cache();
+        assert!(engine.render_cache.is_empty());
+    }
+
+    #[test]
+    fn test_set_max_cache_size() {
+        let mut engine =
+            Engine::new("templates", Duration::from_secs(3600));
+        let _ = engine
+            .render_cache
+            .insert("key1".to_string(), "value1".to_string());
+        let _ = engine
+            .render_cache
+            .insert("key2".to_string(), "value2".to_string());
+        assert_eq!(engine.render_cache.len(), 2);
+
+        engine.set_max_cache_size(1);
+        assert!(engine.render_cache.is_empty());
     }
 }
