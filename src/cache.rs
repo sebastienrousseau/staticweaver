@@ -488,7 +488,7 @@ mod tests {
     fn test_remove() {
         let mut cache: Cache<String, String> =
             Cache::new(Duration::from_secs(60));
-       let _ =  cache.insert("key1".to_string(), "value1".to_string());
+        let _ = cache.insert("key1".to_string(), "value1".to_string());
 
         assert_eq!(
             cache.remove(&"key1".to_string()),

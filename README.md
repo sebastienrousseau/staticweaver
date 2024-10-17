@@ -30,10 +30,10 @@ Unlike other templating libraries, `StaticWeaver` offers advanced caching mechan
 - **Versatile Template Rendering**: Supports static site generation, web apps, and more.
 - **Variable Interpolation**: Easily replace placeholders in templates with dynamic content.
 - **Context System**: Flexibly manage variables and dynamic content in templates using an intuitive context system.
-- **File and String-Based Templates**: Render templates from both files and string literals, allowing for flexibility in template management.
-- **Error Handling**: Comprehensive error handling that ensures graceful recovery from template errors.
-- **Caching**: Integrated template caching improves performance by reducing file I/O during repeated renders.
-- **Customizable Rendering**: Easily extend or modify the rendering process to meet custom requirements.
+- **File and String-Based Templates**: Render templates from both files and string literals for flexible template management.
+- **Comprehensive Error Handling**: Ensures graceful recovery from template errors.
+- **Efficient Caching**: Integrated template caching improves performance by reducing file I/O during repeated renders.
+- **Customizable Rendering**: Easily extend or modify the rendering process to meet specific requirements.
 - **Remote Template Support**: Fetch templates from URLs for distributed or dynamically updated template sources.
 
 ## Installation
