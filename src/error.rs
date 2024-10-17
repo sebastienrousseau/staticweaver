@@ -159,4 +159,142 @@ mod tests {
             "Invalid operation: Nested templates not allowed"
         );
     }
+
+    #[test]
+    fn test_engine_error_io() {
+        let io_err =
+            io::Error::new(io::ErrorKind::NotFound, "File not found");
+        let err = EngineError::Io(io_err);
+        assert_eq!(err.to_string(), "I/O error: File not found");
+    }
+
+    #[test]
+    fn test_engine_error_render() {
+        let err = EngineError::Render(
+            "Failed to render template".to_string(),
+        );
+        assert_eq!(
+            err.to_string(),
+            "Render error: Failed to render template"
+        );
+    }
+
+    #[test]
+    fn test_engine_error_invalid_template() {
+        let err =
+            EngineError::InvalidTemplate("Invalid syntax".to_string());
+        assert_eq!(err.to_string(), "Invalid template: Invalid syntax");
+    }
+
+    #[test]
+    fn test_engine_error_template() {
+        let template_err =
+            TemplateError::InvalidSyntax("Unclosed tag".to_string());
+        let err = EngineError::Template(template_err);
+        assert_eq!(
+            err.to_string(),
+            "Template error: Invalid template syntax: Unclosed tag"
+        );
+    }
+
+    #[test]
+    fn test_engine_error_resource_not_found() {
+        let err =
+            EngineError::ResourceNotFound("template.html".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Resource not found: template.html"
+        );
+    }
+
+    #[test]
+    fn test_engine_error_timeout() {
+        let err = EngineError::Timeout(
+            "Fetching remote template".to_string(),
+        );
+        assert_eq!(
+            err.to_string(),
+            "Operation timed out: Fetching remote template"
+        );
+    }
+
+    // TemplateError tests
+
+    #[test]
+    fn test_template_error_io() {
+        let io_err = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Permission denied",
+        );
+        let err = TemplateError::Io(io_err);
+        assert_eq!(err.to_string(), "I/O error: Permission denied");
+    }
+
+    #[test]
+    fn test_template_error_invalid_syntax() {
+        let err =
+            TemplateError::InvalidSyntax("Unclosed tag".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Invalid template syntax: Unclosed tag"
+        );
+    }
+
+    #[test]
+    fn test_template_error_render_error() {
+        let err = TemplateError::RenderError(
+            "Missing context variable".to_string(),
+        );
+        assert_eq!(
+            err.to_string(),
+            "Rendering error: Missing context variable"
+        );
+    }
+
+    #[test]
+    fn test_template_error_engine_error() {
+        let engine_err =
+            EngineError::Render("Render failure".to_string());
+        let err = TemplateError::EngineError(Box::new(engine_err));
+        assert_eq!(
+            err.to_string(),
+            "Engine error: Render error: Render failure"
+        );
+    }
+
+    #[test]
+    fn test_template_error_missing_variable() {
+        let err =
+            TemplateError::MissingVariable("user_name".to_string());
+        assert_eq!(err.to_string(), "Missing variable: user_name");
+    }
+
+    #[test]
+    fn test_template_error_invalid_operation() {
+        let err = TemplateError::InvalidOperation(
+            "Nested templates not allowed".to_string(),
+        );
+        assert_eq!(
+            err.to_string(),
+            "Invalid operation: Nested templates not allowed"
+        );
+    }
+
+    #[test]
+    fn test_engine_error_conversion_from_io_error() {
+        let io_err =
+            io::Error::new(io::ErrorKind::NotFound, "File not found");
+        let engine_err: EngineError = io_err.into();
+        assert!(matches!(engine_err, EngineError::Io(_)));
+    }
+
+    #[test]
+    fn test_template_error_conversion_from_io_error() {
+        let io_err = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Permission denied",
+        );
+        let template_err: TemplateError = io_err.into();
+        assert!(matches!(template_err, TemplateError::Io(_)));
+    }
 }
