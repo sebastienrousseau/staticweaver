@@ -109,14 +109,10 @@ thiserror = "1.0"
 # -----------------------------------------------------------------------------
 # Criterion Benchmark
 # -----------------------------------------------------------------------------
-# [[bench]]
-# # Benchmarking configuration for performance testing.
-# name = "server_benchmark"                   # Name of the benchmark
-# harness = false                             # Disable the default benchmark harness (used by Criterion)
-
-# [profile.bench]
-# # Profile used when running benchmarks.
-# debug = true                                # Include debug symbols for better diagnostics
+[[bench]]
+# Benchmarking configuration for performance testing.
+name = "template_benchmark"                   # Name of the benchmark
+harness = false                             # Disable the default benchmark harness (used by Criterion)
 
 # -----------------------------------------------------------------------------
 # Documentation Configuration

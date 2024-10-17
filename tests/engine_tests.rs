@@ -19,7 +19,8 @@ mod tests {
     fn create_basic_context() -> HashMap<String, String> {
         let mut context = HashMap::new();
         let _ = context.insert("name".to_string(), "World".to_string());
-        let _ = context.insert("greeting".to_string(), "Hello".to_string());
+        let _ =
+            context.insert("greeting".to_string(), "Hello".to_string());
         context
     }
 
@@ -92,7 +93,8 @@ mod tests {
                 "name".to_string(),
                 "<script>alert('XSS')</script>".to_string(),
             );
-            let _ = context.insert("greeting".to_string(), "&".to_string());
+            let _ =
+                context.insert("greeting".to_string(), "&".to_string());
             let template = "{{greeting}} {{name}}";
             assert_template_rendering(
                 &engine,
@@ -112,7 +114,8 @@ mod tests {
                 (0..1000).map(|i| format!("value{}", i)).collect();
 
             for i in 0..1000 {
-                let _ = context.insert(keys[i].clone(), values[i].clone());
+                let _ =
+                    context.insert(keys[i].clone(), values[i].clone());
             }
 
             let mut template = String::new();
@@ -155,10 +158,7 @@ mod tests {
             };
             let result =
                 engine.render_page(&context, "nonexistent_layout");
-            assert!(matches!(
-                result,
-                Err(Io(_))
-            ));
+            assert!(matches!(result, Err(Io(_))));
         }
 
         #[test]

@@ -573,7 +573,8 @@ mod tests {
         engine.set_delimiters("<<", ">>");
         let mut context = HashMap::new();
         let _ = context.insert("name".to_string(), "Alice".to_string());
-        let _ = context.insert("greeting".to_string(), "Hello".to_string());
+        let _ =
+            context.insert("greeting".to_string(), "Hello".to_string());
 
         let template = "<<greeting>>, <<name>>!";
         let result =
@@ -609,7 +610,8 @@ mod tests {
         engine.set_delimiters("<<", ">>");
         let mut context = HashMap::new();
         let _ = context.insert("name".to_string(), "Alice".to_string());
-        let _ = context.insert("greeting".to_string(), "Hello".to_string());
+        let _ =
+            context.insert("greeting".to_string(), "Hello".to_string());
 
         let template = "<<greeting>>, <<name>>!";
         let result =
