@@ -198,7 +198,7 @@ impl Engine {
 
         // Render the template with the provided context
         let rendered =
-            self.render_template(&template_content, &context.elements)?;
+            self.render_template(&template_content, context)?;
 
         // Cache the rendered result for future use
         let _ = self.render_cache.insert(cache_key, rendered.clone());

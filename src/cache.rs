@@ -90,7 +90,8 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         if let Some(cap) = self.capacity {
-            if self.items.len() >= cap && !self.items.contains_key(&key) {
+            if self.items.len() >= cap && !self.items.contains_key(&key)
+            {
                 return None; // Cache is at capacity
             }
         }
@@ -406,13 +407,20 @@ mod tests {
             ("key2".to_string(), "value2".to_string()),
         ];
         let cache: Cache<String, String> = items.into_iter().collect();
-        assert_eq!(cache.get(&"key1".to_string()), Some(&"value1".to_string()));
-        assert_eq!(cache.get(&"key2".to_string()), Some(&"value2".to_string()));
+        assert_eq!(
+            cache.get(&"key1".to_string()),
+            Some(&"value1".to_string())
+        );
+        assert_eq!(
+            cache.get(&"key2".to_string()),
+            Some(&"value2".to_string())
+        );
     }
 
     #[test]
     fn test_with_capacity() {
-        let cache: Cache<String, String> = Cache::with_capacity(Duration::from_secs(60), 100);
+        let cache: Cache<String, String> =
+            Cache::with_capacity(Duration::from_secs(60), 100);
         assert!(cache.items.capacity() >= 100);
     }
 }

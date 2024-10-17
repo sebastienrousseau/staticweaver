@@ -9,7 +9,7 @@ mod context_tests {
     #[test]
     fn test_context_new() {
         let context = Context::new();
-        assert!(context.elements.is_empty());
+        assert!(context.is_empty());
     }
 
     /// Test setting and getting a key-value pair in the context.

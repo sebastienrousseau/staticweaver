@@ -6,13 +6,11 @@
 //! This module provides the `Context` struct, which is used to store and manage
 //! key-value pairs for template rendering. It offers a flexible and efficient way
 //! to handle template variables and their values.
-//!
-//! The `Context` struct uses `FnvHashMap` for efficient string-based key lookups
-//! and provides methods for manipulating and querying the stored data.
 
 use fnv::FnvHashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::ops::{Deref, DerefMut};
 
 /// Represents the context for template rendering.
 ///
@@ -25,14 +23,14 @@ use std::hash::{Hash, Hasher};
 /// ```
 /// use staticweaver::Context;
 ///
-/// let mut context = Context::default();
+/// let mut context = Context::new();
 /// context.set("name".to_string(), "Alice".to_string());
 /// assert_eq!(context.get("name"), Some(&"Alice".to_string()));
 /// ```
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct Context {
     /// The internal storage for context key-value pairs.
-    pub elements: FnvHashMap<String, String>,
+    elements: FnvHashMap<String, String>,
 }
 
 impl Context {
@@ -80,11 +78,6 @@ impl Context {
     /// # Returns
     ///
     /// A `u64` representing the hash of the context.
-    ///
-    /// # Panics
-    ///
-    /// This method will panic if the hash computation overflows, which is
-    /// extremely unlikely in practical scenarios.
     ///
     /// # Examples
     ///
@@ -286,6 +279,31 @@ impl Context {
     pub fn clear(&mut self) {
         self.elements.clear();
     }
+
+    /// Updates an existing key with a new value or inserts it if it doesn't exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to update or insert.
+    /// * `value` - The new value to associate with the key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let mut context = Context::new();
+    /// context.set("key".to_string(), "old_value".to_string());
+    /// context.update("key", "new_value");
+    /// assert_eq!(context.get("key"), Some(&"new_value".to_string()));
+    /// ```
+    pub fn update<K, V>(&mut self, key: K, value: V)
+    where
+        K: Into<String>,
+        V: Into<String>,
+    {
+        let _ = self.elements.insert(key.into(), value.into());
+    }
 }
 
 impl FromIterator<(String, String)> for Context {
@@ -336,6 +354,20 @@ impl Extend<(String, String)> for Context {
         for (key, value) in iter {
             self.set(key, value);
         }
+    }
+}
+
+impl Deref for Context {
+    type Target = FnvHashMap<String, String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.elements
+    }
+}
+
+impl DerefMut for Context {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.elements
     }
 }
 
@@ -444,5 +476,35 @@ mod tests {
 
         context.clear();
         assert!(context.is_empty());
+    }
+
+    #[test]
+    fn test_deref() {
+        let mut context = Context::new();
+        context.set("key".to_string(), "value".to_string());
+        assert_eq!(context["key"], "value");
+    }
+
+    #[test]
+    fn test_deref_mut() {
+        let mut context = Context::new();
+        context.set("key".to_string(), "value".to_string());
+
+        // Use the entry API to modify the value
+        let _ = context
+            .entry("key".to_string())
+            .and_modify(|val| *val = "new_value".to_string());
+
+        assert_eq!(context.get("key"), Some(&"new_value".to_string()));
+    }
+
+    #[test]
+    fn test_update() {
+        let mut context = Context::new();
+        context.set("key".to_string(), "value".to_string());
+
+        context.update("key", "new_value");
+
+        assert_eq!(context.get("key"), Some(&"new_value".to_string()));
     }
 }
