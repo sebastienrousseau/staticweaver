@@ -65,7 +65,10 @@ impl Context {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            elements: FnvHashMap::with_capacity_and_hasher(capacity, Default::default()),
+            elements: FnvHashMap::with_capacity_and_hasher(
+                capacity,
+                Default::default(),
+            ),
         }
     }
 
@@ -301,7 +304,9 @@ impl FromIterator<(String, String)> for Context {
     /// assert_eq!(context.get("key1"), Some(&"value1".to_string()));
     /// assert_eq!(context.get("key2"), Some(&"value2".to_string()));
     /// ```
-    fn from_iter<I: IntoIterator<Item = (String, String)>>(iter: I) -> Self {
+    fn from_iter<I: IntoIterator<Item = (String, String)>>(
+        iter: I,
+    ) -> Self {
         let mut context = Context::new();
         context.extend(iter);
         context
@@ -324,7 +329,10 @@ impl Extend<(String, String)> for Context {
     /// assert_eq!(context.get("key1"), Some(&"value1".to_string()));
     /// assert_eq!(context.get("key2"), Some(&"value2".to_string()));
     /// ```
-    fn extend<T: IntoIterator<Item = (String, String)>>(&mut self, iter: T) {
+    fn extend<T: IntoIterator<Item = (String, String)>>(
+        &mut self,
+        iter: T,
+    ) {
         for (key, value) in iter {
             self.set(key, value);
         }
@@ -414,7 +422,8 @@ mod tests {
         context.set("key1".to_string(), "value1".to_string());
         context.set("key2".to_string(), "value2".to_string());
 
-        let mut pairs: Vec<(&String, &String)> = context.iter().collect();
+        let mut pairs: Vec<(&String, &String)> =
+            context.iter().collect();
         pairs.sort_by(|a, b| a.0.cmp(b.0));
 
         assert_eq!(

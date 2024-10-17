@@ -52,6 +52,7 @@ Here's a basic example of how to use `staticweaver`:
 ```rust
 use std::fs;
 use staticweaver::engine::Engine;
+use staticweaver::EngineError;
 use staticweaver::error::TemplateError;
 use staticweaver::context::Context;
 use std::time::Duration;
@@ -75,8 +76,10 @@ fn main() -> Result<(), TemplateError> {
     context.set("title".to_string(), "Welcome to StaticWeaver".to_string());
     context.set("content".to_string(), "This is a simple example.".to_string());
 
-    // Render the 'template.html'
-    let rendered = engine.render_page(&context, "template")?;
+    // Render the 'template.html', mapping EngineError to TemplateError
+    let rendered = engine
+        .render_page(&context, "template")
+        .map_err(|e| TemplateError::EngineError(Box::new(EngineError::Render(format!("Rendering failed: {:?}", e)))))?;
 
     // Output the rendered content to 'rendered.html'
     fs::write("examples/rendered.html", &rendered)?;

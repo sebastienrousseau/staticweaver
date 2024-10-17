@@ -22,7 +22,8 @@ mod tests {
     fn create_basic_context() -> FnvHashMap<String, String> {
         let mut context = FnvHashMap::default();
         let _ = context.insert("name".to_string(), "World".to_string());
-        let _ = context.insert("greeting".to_string(), "Hello".to_string());
+        let _ =
+            context.insert("greeting".to_string(), "Hello".to_string());
         context
     }
 
@@ -33,8 +34,7 @@ mod tests {
         context: &FnvHashMap<String, String>,
         expected_result: Result<&str, EngineError>,
     ) {
-        let context: std::collections::HashMap<String, String> = context.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        let result = engine.render_template(template, &context);
+        let result = engine.render_template(template, context);
         match expected_result {
             Ok(expected) => assert_eq!(result.unwrap(), expected),
             Err(_) => assert!(result.is_err()),
@@ -96,7 +96,8 @@ mod tests {
                 "name".to_string(),
                 "<script>alert('XSS')</script>".to_string(),
             );
-            let _ = context.insert("greeting".to_string(), "&".to_string());
+            let _ =
+                context.insert("greeting".to_string(), "&".to_string());
             let template = "{{greeting}} {{name}}";
             assert_template_rendering(
                 &engine,
@@ -116,7 +117,8 @@ mod tests {
                 (0..1000).map(|i| format!("value{}", i)).collect();
 
             for i in 0..1000 {
-                let _ = context.insert(keys[i].clone(), values[i].clone());
+                let _ =
+                    context.insert(keys[i].clone(), values[i].clone());
             }
 
             let mut template = String::new();
@@ -124,8 +126,8 @@ mod tests {
                 template.push_str(&format!("{{{{key{}}}}}", i));
             }
 
-            let context: std::collections::HashMap<_, _> = context.into_iter().collect();
-            let result = engine.render_template(&template, &context).unwrap();
+            let result =
+                engine.render_template(&template, &context).unwrap();
             let expected_result =
                 (0..1000).fold(String::new(), |mut acc, i| {
                     use std::fmt::Write;
@@ -154,9 +156,7 @@ mod tests {
         fn test_engine_invalid_template_path() {
             let mut engine =
                 Engine::new("invalid/path", Duration::from_secs(60));
-            let context = Context {
-                elements: FnvHashMap::default(),
-            };
+            let context = Context::new();
             let result =
                 engine.render_page(&context, "nonexistent_layout");
             assert!(matches!(result, Err(Io(_))));
@@ -182,9 +182,9 @@ mod tests {
                 Duration::from_secs(60),
             );
 
-            let context = Context {
-                elements: create_basic_context(),
-            };
+            let mut context = Context::new();
+            context.set("greeting".to_string(), "Hello".to_string());
+            context.set("name".to_string(), "World".to_string());
 
             let result = engine.render_page(&context, "layout");
             assert!(
@@ -206,9 +206,7 @@ mod tests {
         fn test_render_page_missing_file() {
             let mut engine =
                 Engine::new("missing/path", Duration::from_secs(60));
-            let context = Context {
-                elements: FnvHashMap::default(),
-            };
+            let context = Context::new();
             let result =
                 engine.render_page(&context, "nonexistent_layout");
             assert!(matches!(result, Err(Io(_))));
