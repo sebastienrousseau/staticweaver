@@ -15,6 +15,7 @@ use thiserror::Error;
 /// network request errors, and rendering-specific issues. It provides a unified interface for
 /// handling errors in the engine context.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum EngineError {
     /// I/O error encountered during engine operations.
     #[error("I/O error: {0}")]
@@ -35,6 +36,14 @@ pub enum EngineError {
     /// Template-specific error, such as invalid syntax or rendering issues.
     #[error("Template error: {0}")]
     Template(#[from] TemplateError),
+
+    /// Error when a required resource is not found.
+    #[error("Resource not found: {0}")]
+    ResourceNotFound(String),
+
+    /// Error when an operation times out.
+    #[error("Operation timed out: {0}")]
+    Timeout(String),
 }
 
 /// Represents errors specific to template processing.
@@ -42,6 +51,7 @@ pub enum EngineError {
 /// This error type focuses on issues related to the manipulation of templates,
 /// such as syntax errors, rendering failures, or invalid input data.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum TemplateError {
     /// I/O error encountered during template operations.
     #[error("I/O error: {0}")]
@@ -62,6 +72,14 @@ pub enum TemplateError {
     /// Encountered an engine error during the template processing.
     #[error("Engine error: {0}")]
     EngineError(#[from] Box<EngineError>),
+
+    /// Error when a required variable is missing from the context.
+    #[error("Missing variable: {0}")]
+    MissingVariable(String),
+
+    /// Error when an invalid operation is attempted on a template.
+    #[error("Invalid operation: {0}")]
+    InvalidOperation(String),
 }
 
 /// A specialized `Result` type for StaticWeaver operations.
@@ -101,5 +119,44 @@ mod tests {
             io::Error::new(io::ErrorKind::NotFound, "File not found");
         let engine_err: EngineError = io_err.into();
         assert!(matches!(engine_err, EngineError::Io(_)));
+    }
+
+    #[test]
+    fn test_resource_not_found_error() {
+        let err =
+            EngineError::ResourceNotFound("template.html".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Resource not found: template.html"
+        );
+    }
+
+    #[test]
+    fn test_timeout_error() {
+        let err = EngineError::Timeout(
+            "Fetching remote template".to_string(),
+        );
+        assert_eq!(
+            err.to_string(),
+            "Operation timed out: Fetching remote template"
+        );
+    }
+
+    #[test]
+    fn test_missing_variable_error() {
+        let err =
+            TemplateError::MissingVariable("user_name".to_string());
+        assert_eq!(err.to_string(), "Missing variable: user_name");
+    }
+
+    #[test]
+    fn test_invalid_operation_error() {
+        let err = TemplateError::InvalidOperation(
+            "Nested templates not allowed".to_string(),
+        );
+        assert_eq!(
+            err.to_string(),
+            "Invalid operation: Nested templates not allowed"
+        );
     }
 }
