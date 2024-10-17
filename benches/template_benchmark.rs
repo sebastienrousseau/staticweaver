@@ -15,38 +15,43 @@ use criterion::{
 use staticweaver::{Context, Engine};
 use std::time::Duration;
 
+/// The template string used for benchmarking.
+const TEMPLATE: &str = "<html><body>{{name}}</body></html>";
+
+/// Creates a context for benchmarking.
+fn create_benchmark_context() -> Context {
+    let mut context = Context::new();
+    context.set("name".to_string(), "Alice".to_string());
+    context
+}
+
+/// Renders a template for benchmarking.
+fn render_template(
+    engine: &Engine,
+    template: &str,
+    context: &Context,
+) -> String {
+    engine
+        .render_template(black_box(template), black_box(context))
+        .expect("Failed to render template")
+}
+
 /// Benchmarks the performance of the template rendering engine by rendering a template with different contexts.
 fn benchmark_template_rendering(c: &mut Criterion) {
-    // Initialize the engine
     let engine = Engine::new("dummy_path", Duration::from_secs(60));
 
-    // Create a template string
-    let template = "<html><body>{{name}}</body></html>";
-
-    // Benchmark the template rendering
     let _ = c.bench_function("template_rendering", |b| {
         b.iter_batched_ref(
-            || {
-                // Setup for each batch, create a fresh context
-                let mut context = Context::new();
-                context.set("name".to_string(), "Alice".to_string());
-                context
-            },
+            create_benchmark_context,
             |context| {
-                // Render the template with the context
-                let rendered = engine
-                    .render_template(
-                        black_box(template),
-                        black_box(context),
-                    )
-                    .expect("Failed to render template");
-                let _ = black_box(rendered);
+                let _ = black_box(render_template(
+                    &engine, TEMPLATE, context,
+                ));
             },
-            criterion::BatchSize::SmallInput, // Control batch size
-        );
+            criterion::BatchSize::SmallInput,
+        )
     });
 }
 
-// Criterion group and main function to set up and run the benchmark.
 criterion_group!(benches, benchmark_template_rendering);
 criterion_main!(benches);
