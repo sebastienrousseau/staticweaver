@@ -488,7 +488,7 @@ mod tests {
     fn test_remove() {
         let mut cache: Cache<String, String> =
             Cache::new(Duration::from_secs(60));
-        cache.insert("key1".to_string(), "value1".to_string());
+       let _ =  cache.insert("key1".to_string(), "value1".to_string());
 
         assert_eq!(
             cache.remove(&"key1".to_string()),
@@ -501,7 +501,7 @@ mod tests {
     fn test_update() {
         let mut cache: Cache<String, String> =
             Cache::new(Duration::from_secs(60));
-        cache.insert("key1".to_string(), "value1".to_string());
+        let _ = cache.insert("key1".to_string(), "value1".to_string());
 
         assert!(cache.update(&"key1".to_string(), "value2".to_string()));
         assert_eq!(
@@ -527,8 +527,8 @@ mod tests {
     #[test]
     fn test_iter() {
         let mut cache = Cache::new(Duration::from_millis(100));
-        cache.insert("key1".to_string(), "value1".to_string());
-        cache.insert("key2".to_string(), "value2".to_string());
+        let _ = cache.insert("key1".to_string(), "value1".to_string());
+        let _ = cache.insert("key2".to_string(), "value2".to_string());
 
         let items: Vec<(&String, &String)> = cache.iter().collect();
         assert_eq!(items.len(), 2);
