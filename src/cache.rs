@@ -1,8 +1,6 @@
 // Copyright © 2024 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-// src/cache.rs
-
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
@@ -14,7 +12,7 @@ struct CachedItem<T> {
     expiration: Instant,
 }
 
-/// A simple cache implementation with expiration.
+/// A simple cache implementation with expiration and optional capacity limit.
 #[derive(Debug)]
 pub struct Cache<K, V> {
     items: HashMap<K, CachedItem<V>>,
@@ -39,10 +37,34 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// ```
     #[must_use]
     pub fn new(ttl: Duration) -> Self {
-        Cache {
+        Self {
             items: HashMap::new(),
             ttl,
             capacity: None,
+        }
+    }
+
+    /// Creates a new Cache with the specified TTL and initial capacity.
+    ///
+    /// # Arguments
+    ///
+    /// * `ttl` - The time-to-live for cached items.
+    /// * `capacity` - The initial capacity of the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let cache: Cache<String, String> = Cache::with_capacity(Duration::from_secs(60), 100);
+    /// ```
+    #[must_use]
+    pub fn with_capacity(ttl: Duration, capacity: usize) -> Self {
+        Self {
+            items: HashMap::with_capacity(capacity),
+            ttl,
+            capacity: Some(capacity),
         }
     }
 
@@ -68,8 +90,7 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         if let Some(cap) = self.capacity {
-            if self.items.len() >= cap && !self.items.contains_key(&key)
-            {
+            if self.items.len() >= cap && !self.items.contains_key(&key) {
                 return None; // Cache is at capacity
             }
         }
@@ -120,7 +141,7 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
         self.items.retain(|_, item| item.expiration > now);
     }
 
-    /// Checks if a key exists in the cache without updating its expiration.
+    /// Checks if a key exists in the cache and hasn't expired.
     ///
     /// # Arguments
     ///
@@ -225,13 +246,19 @@ impl<K: Hash + Eq, V: Clone> IntoIterator for Cache<K, V> {
     }
 }
 
-impl<K, V> Default for Cache<K, V> {
+impl<K: Hash + Eq, V: Clone> Default for Cache<K, V> {
     fn default() -> Self {
-        Cache {
-            items: HashMap::new(),
-            ttl: Duration::from_secs(60),
-            capacity: None,
+        Self::new(Duration::from_secs(60))
+    }
+}
+
+impl<K: Hash + Eq, V: Clone> FromIterator<(K, V)> for Cache<K, V> {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut cache = Self::default();
+        for (k, v) in iter {
+            let _ = cache.insert(k, v);
         }
+        cache
     }
 }
 
@@ -370,5 +397,22 @@ mod tests {
 
         assert_eq!(cache.get(&"key1".to_string()), None);
         assert_eq!(cache.get(&"key2".to_string()), None);
+    }
+
+    #[test]
+    fn test_from_iterator() {
+        let items = vec![
+            ("key1".to_string(), "value1".to_string()),
+            ("key2".to_string(), "value2".to_string()),
+        ];
+        let cache: Cache<String, String> = items.into_iter().collect();
+        assert_eq!(cache.get(&"key1".to_string()), Some(&"value1".to_string()));
+        assert_eq!(cache.get(&"key2".to_string()), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_with_capacity() {
+        let cache: Cache<String, String> = Cache::with_capacity(Duration::from_secs(60), 100);
+        assert!(cache.items.capacity() >= 100);
     }
 }
