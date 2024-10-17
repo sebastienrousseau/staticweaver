@@ -12,8 +12,7 @@
 use criterion::{
     black_box, criterion_group, criterion_main, Criterion,
 };
-use fnv::FnvHashMap;
-use staticweaver::Engine;
+use staticweaver::{Context, Engine};
 use std::time::Duration;
 
 /// Benchmarks the performance of the template rendering engine by rendering a template with different contexts.
@@ -29,15 +28,17 @@ fn benchmark_template_rendering(c: &mut Criterion) {
         b.iter_batched_ref(
             || {
                 // Setup for each batch, create a fresh context
-                let mut context = FnvHashMap::default();
-                let _ = context
-                    .insert("name".to_string(), "Alice".to_string());
+                let mut context = Context::new();
+                context.set("name".to_string(), "Alice".to_string());
                 context
             },
             |context| {
                 // Render the template with the context
                 let rendered = engine
-                    .render_template(template, context)
+                    .render_template(
+                        black_box(template),
+                        black_box(context),
+                    )
                     .expect("Failed to render template");
                 let _ = black_box(rendered);
             },

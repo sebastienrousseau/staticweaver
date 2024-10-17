@@ -34,7 +34,11 @@ mod tests {
         context: &FnvHashMap<String, String>,
         expected_result: Result<&str, EngineError>,
     ) {
-        let result = engine.render_template(template, context);
+        let context: Context = context
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let result = engine.render_template(template, &context);
         match expected_result {
             Ok(expected) => assert_eq!(result.unwrap(), expected),
             Err(_) => assert!(result.is_err()),
@@ -110,24 +114,26 @@ mod tests {
         #[test]
         fn test_engine_large_context() {
             let engine = create_engine();
-            let mut context = FnvHashMap::default();
-            let keys: Vec<String> =
-                (0..1000).map(|i| format!("key{}", i)).collect();
-            let values: Vec<String> =
-                (0..1000).map(|i| format!("value{}", i)).collect();
+            let mut context = Context::new();
 
+            // Create a large number of key-value pairs
             for i in 0..1000 {
-                let _ =
-                    context.insert(keys[i].clone(), values[i].clone());
+                context.set(format!("key{}", i), format!("value{}", i));
             }
 
-            let mut template = String::new();
-            for i in 0..1000 {
-                template.push_str(&format!("{{{{key{}}}}}", i));
-            }
+            // Create a template string with all the keys
+            let template =
+                (0..1000).fold(String::new(), |mut acc, i| {
+                    use std::fmt::Write;
+                    write!(&mut acc, "{{{{key{}}}}}", i).unwrap();
+                    acc
+                });
 
+            // Render the template
             let result =
                 engine.render_template(&template, &context).unwrap();
+
+            // Create the expected result
             let expected_result =
                 (0..1000).fold(String::new(), |mut acc, i| {
                     use std::fmt::Write;
@@ -137,212 +143,218 @@ mod tests {
 
             assert_eq!(result, expected_result);
         }
-    }
 
-    /// Tests related to file operations, such as downloading templates.
-    mod file_tests {
-        use super::*;
-        use staticweaver::engine::EngineError::Io;
+        /// Tests related to file operations, such as downloading templates.
+        mod file_tests {
+            use super::*;
+            use staticweaver::engine::EngineError::Io;
 
-        #[test]
-        fn test_engine_download_file() {
-            let engine = create_engine();
-            let url = "https://raw.githubusercontent.com/sebastienrousseau/shokunin/main/template";
-            let result = engine.create_template_folder(Some(url));
-            assert!(result.is_ok());
-        }
+            #[test]
+            fn test_engine_download_file() {
+                let engine = create_engine();
+                let url = "https://raw.githubusercontent.com/sebastienrousseau/shokunin/main/template";
+                let result = engine.create_template_folder(Some(url));
+                assert!(result.is_ok());
+            }
 
-        #[test]
-        fn test_engine_invalid_template_path() {
-            let mut engine =
-                Engine::new("invalid/path", Duration::from_secs(60));
-            let context = Context::new();
-            let result =
-                engine.render_page(&context, "nonexistent_layout");
-            assert!(matches!(result, Err(Io(_))));
-        }
+            #[test]
+            fn test_engine_invalid_template_path() {
+                let mut engine = Engine::new(
+                    "invalid/path",
+                    Duration::from_secs(60),
+                );
+                let context = Context::new();
+                let result =
+                    engine.render_page(&context, "nonexistent_layout");
+                assert!(matches!(result, Err(Io(_))));
+            }
 
-        #[test]
-        fn test_render_page_valid_path() {
-            let temp_dir = tempdir().unwrap();
-            let layout_path = temp_dir.path().join("layout.html");
+            #[test]
+            fn test_render_page_valid_path() {
+                let temp_dir = tempdir().unwrap();
+                let layout_path = temp_dir.path().join("layout.html");
 
-            let mut file = File::create(&layout_path)
-                .expect("Failed to create temp layout file");
-            writeln!(file, "<html><body>{{{{greeting}}}}, {{{{name}}}}</body></html>")
+                let mut file = File::create(&layout_path)
+                    .expect("Failed to create temp layout file");
+                writeln!(file, "<html><body>{{{{greeting}}}}, {{{{name}}}}</body></html>")
                 .expect("Failed to write content to layout file");
 
-            println!(
-                "Layout directory path: {}",
-                temp_dir.path().to_str().unwrap()
-            );
+                println!(
+                    "Layout directory path: {}",
+                    temp_dir.path().to_str().unwrap()
+                );
 
-            let mut engine = Engine::new(
-                temp_dir.path().to_str().unwrap(),
-                Duration::from_secs(60),
-            );
+                let mut engine = Engine::new(
+                    temp_dir.path().to_str().unwrap(),
+                    Duration::from_secs(60),
+                );
 
-            let mut context = Context::new();
-            context.set("greeting".to_string(), "Hello".to_string());
-            context.set("name".to_string(), "World".to_string());
+                let mut context = Context::new();
+                context
+                    .set("greeting".to_string(), "Hello".to_string());
+                context.set("name".to_string(), "World".to_string());
 
-            let result = engine.render_page(&context, "layout");
-            assert!(
-                result.is_ok(),
-                "Failed to render page, result: {:?}",
-                result
-            );
+                let result = engine.render_page(&context, "layout");
+                assert!(
+                    result.is_ok(),
+                    "Failed to render page, result: {:?}",
+                    result
+                );
 
-            let rendered_page = result.unwrap();
-            println!("Rendered page: {}", rendered_page.trim());
+                let rendered_page = result.unwrap();
+                println!("Rendered page: {}", rendered_page.trim());
 
-            assert_eq!(
-                rendered_page.trim(),
-                "<html><body>Hello, World</body></html>"
-            );
-        }
-
-        #[test]
-        fn test_render_page_missing_file() {
-            let mut engine =
-                Engine::new("missing/path", Duration::from_secs(60));
-            let context = Context::new();
-            let result =
-                engine.render_page(&context, "nonexistent_layout");
-            assert!(matches!(result, Err(Io(_))));
-        }
-    }
-
-    /// Tests for the `PageOptions` struct.
-    mod page_options_tests {
-        use super::*;
-
-        #[test]
-        fn test_page_options_new() {
-            let options = PageOptions::new();
-            assert!(options.elements.is_empty());
-        }
-
-        #[test]
-        fn test_page_options_set_get() {
-            let mut options = PageOptions::new();
-            options.set("title".to_string(), "My Title".to_string());
-            assert_eq!(
-                options.get("title"),
-                Some(&"My Title".to_string())
-            );
-            assert_eq!(options.get("non_existent"), None);
-        }
-
-        #[test]
-        fn test_page_options_large_context() {
-            let mut options = PageOptions::new();
-            for i in 0..1000 {
-                let key = format!("key{}", i);
-                let value = format!("value{}", i);
-                options.set(key, value);
+                assert_eq!(
+                    rendered_page.trim(),
+                    "<html><body>Hello, World</body></html>"
+                );
             }
-            assert_eq!(
-                options.get("key999"),
-                Some(&"value999".to_string())
-            );
-            assert_eq!(options.get("key1000"), None);
+
+            #[test]
+            fn test_render_page_missing_file() {
+                let mut engine = Engine::new(
+                    "missing/path",
+                    Duration::from_secs(60),
+                );
+                let context = Context::new();
+                let result =
+                    engine.render_page(&context, "nonexistent_layout");
+                assert!(matches!(result, Err(Io(_))));
+            }
         }
-    }
 
-    /// Edge case tests for template rendering.
-    mod context_edge_cases_tests {
-        use super::*;
+        /// Tests for the `PageOptions` struct.
+        mod page_options_tests {
+            use super::*;
 
-        #[test]
-        fn test_render_template_invalid_format() {
-            let engine = create_engine();
-            let context = create_basic_context();
-            let template = "{greeting}, {name}!";
-            assert_template_rendering(
+            #[test]
+            fn test_page_options_new() {
+                let options = PageOptions::new();
+                assert!(options.elements.is_empty());
+            }
+
+            #[test]
+            fn test_page_options_set_get() {
+                let mut options = PageOptions::new();
+                options
+                    .set("title".to_string(), "My Title".to_string());
+                assert_eq!(
+                    options.get("title"),
+                    Some(&"My Title".to_string())
+                );
+                assert_eq!(options.get("non_existent"), None);
+            }
+
+            #[test]
+            fn test_page_options_large_context() {
+                let mut options = PageOptions::new();
+                for i in 0..1000 {
+                    let key = format!("key{}", i);
+                    let value = format!("value{}", i);
+                    options.set(key, value);
+                }
+                assert_eq!(
+                    options.get("key999"),
+                    Some(&"value999".to_string())
+                );
+                assert_eq!(options.get("key1000"), None);
+            }
+        }
+
+        /// Edge case tests for template rendering.
+        mod context_edge_cases_tests {
+            use super::*;
+
+            #[test]
+            fn test_render_template_invalid_format() {
+                let engine = create_engine();
+                let context = create_basic_context();
+                let template = "{greeting}, {name}!";
+                assert_template_rendering(
                 &engine,
                 template,
                 &context,
                 Err(EngineError::InvalidTemplate("Invalid template format: single curly braces detected".to_string())),
             );
-        }
+            }
 
-        #[test]
-        fn test_render_template_invalid_syntax() {
-            let engine = create_engine();
-            let context = create_basic_context();
-            let invalid_template = "Hello, {{name";
-            assert_template_rendering(
-                &engine,
-                invalid_template,
-                &context,
-                Err(EngineError::InvalidTemplate(
-                    "Unclosed template tag".to_string(),
-                )),
-            );
-        }
+            #[test]
+            fn test_render_template_invalid_syntax() {
+                let engine = create_engine();
+                let context = create_basic_context();
+                let invalid_template = "Hello, {{name";
+                assert_template_rendering(
+                    &engine,
+                    invalid_template,
+                    &context,
+                    Err(EngineError::InvalidTemplate(
+                        "Unclosed template tag".to_string(),
+                    )),
+                );
+            }
 
-        #[test]
-        fn test_render_large_template() {
-            let engine = create_engine();
-            let large_template = "Hello, {{name}}".repeat(1000);
-            let context = create_basic_context();
-            assert_template_rendering(
-                &engine,
-                &large_template,
-                &context,
-                Ok(&"Hello, World".repeat(1000)),
-            );
-        }
+            #[test]
+            fn test_render_large_template() {
+                let engine = create_engine();
+                let large_template = "Hello, {{name}}".repeat(1000);
+                let context = create_basic_context();
+                assert_template_rendering(
+                    &engine,
+                    &large_template,
+                    &context,
+                    Ok(&"Hello, World".repeat(1000)),
+                );
+            }
 
-        #[test]
-        fn test_render_template_empty_template() {
-            let engine = create_engine();
-            let context = create_basic_context();
-            let empty_template = "";
-            assert_template_rendering(
-                &engine,
-                empty_template,
-                &context,
-                Err(EngineError::InvalidTemplate(
-                    "Template is empty".to_string(),
-                )),
-            );
-        }
+            #[test]
+            fn test_render_template_empty_template() {
+                let engine = create_engine();
+                let context = create_basic_context();
+                let empty_template = "";
+                assert_template_rendering(
+                    &engine,
+                    empty_template,
+                    &context,
+                    Err(EngineError::InvalidTemplate(
+                        "Template is empty".to_string(),
+                    )),
+                );
+            }
 
-        #[test]
-        fn test_clear_cache() {
-            let mut engine =
-                Engine::new("templates", Duration::from_secs(3600));
+            #[test]
+            fn test_clear_cache() {
+                let mut engine =
+                    Engine::new("templates", Duration::from_secs(3600));
 
-            let _ = engine
-                .render_cache
-                .insert("key1".to_string(), "value1".to_string());
-            assert!(!engine.render_cache.is_empty());
+                let _ = engine
+                    .render_cache
+                    .insert("key1".to_string(), "value1".to_string());
+                assert!(!engine.render_cache.is_empty());
 
-            // Clear the cache
-            engine.clear_cache();
-            assert!(engine.render_cache.is_empty());
-        }
+                // Clear the cache
+                engine.clear_cache();
+                assert!(engine.render_cache.is_empty());
+            }
 
-        #[test]
-        fn test_set_max_cache_size() {
-            let mut engine =
-                Engine::new("templates", Duration::from_secs(3600));
+            #[test]
+            fn test_set_max_cache_size() {
+                let mut engine =
+                    Engine::new("templates", Duration::from_secs(3600));
 
-            // Insert multiple entries to simulate cache size exceeding max limit
-            let _ = engine
-                .render_cache
-                .insert("key1".to_string(), "value1".to_string());
-            let _ = engine
-                .render_cache
-                .insert("key2".to_string(), "value2".to_string());
-            assert_eq!(engine.render_cache.len(), 2);
+                // Insert multiple entries to simulate cache size exceeding max limit
+                let _ = engine
+                    .render_cache
+                    .insert("key1".to_string(), "value1".to_string());
+                let _ = engine
+                    .render_cache
+                    .insert("key2".to_string(), "value2".to_string());
+                assert_eq!(engine.render_cache.len(), 2);
 
-            // Set max cache size to 1
-            engine.set_max_cache_size(1);
-            // Cache should be cleared as the limit is exceeded
-            assert!(engine.render_cache.is_empty());
+                // Set max cache size to 1
+                engine.set_max_cache_size(1);
+                // Cache should be cleared as the limit is exceeded
+                assert!(engine.render_cache.is_empty());
+            }
         }
     }
 }

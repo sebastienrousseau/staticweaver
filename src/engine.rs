@@ -12,6 +12,7 @@ use crate::context::Context;
 use fnv::FnvHashMap;
 use reqwest;
 use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::tempdir;
@@ -211,7 +212,7 @@ impl Engine {
     /// # Arguments
     ///
     /// * `template` - The template string containing the tags to be replaced.
-    /// * `context` - A `FnvHashMap` containing the key-value pairs to use for substitution.
+    /// * `context` - A `Context` containing the key-value pairs to use for substitution.
     ///
     /// # Returns
     ///
@@ -226,24 +227,22 @@ impl Engine {
     ///
     /// ```
     /// use staticweaver::engine::Engine;
-    /// use fnv::FnvHashMap;
+    /// use staticweaver::Context;
     /// use std::time::Duration;
     ///
-    /// let mut engine = Engine::new("templates", Duration::from_secs(3600));
-    /// engine.set_delimiters("<<", ">>");
+    /// let engine = Engine::new("templates", Duration::from_secs(3600));
+    /// let mut context = Context::new();
+    /// context.set("greeting".to_string(), "Hello".to_string());
+    /// context.set("name".to_string(), "Alice".to_string());
     ///
-    /// let mut context = FnvHashMap::default();
-    /// context.insert("greeting".to_string(), "Hello".to_string());
-    /// context.insert("name".to_string(), "Alice".to_string());
-    ///
-    /// let template = "<<greeting>>, <<name>>!";
+    /// let template = "{{greeting}}, {{name}}!";
     /// let result = engine.render_template(template, &context).unwrap();
     /// assert_eq!(result, "Hello, Alice!");
     /// ```
     pub fn render_template(
         &self,
         template: &str,
-        context: &FnvHashMap<String, String>,
+        context: &Context,
     ) -> Result<String, EngineError> {
         if template.trim().is_empty() {
             return Err(EngineError::InvalidTemplate(
@@ -440,7 +439,7 @@ impl Engine {
         let file_path = dir.join(file);
 
         let client = reqwest::blocking::Client::new();
-        let mut response = client
+        let response = client
             .get(&file_url)
             .timeout(Duration::from_secs(10)) // Set a timeout
             .send()?;
@@ -456,7 +455,8 @@ impl Engine {
 
         // Proceed with file saving if the response is successful
         let mut file = File::create(&file_path)?;
-        let _ = response.copy_to(&mut file)?;
+        let content = response.text()?;
+        file.write_all(content.as_bytes())?;
 
         Ok(())
     }
@@ -532,10 +532,9 @@ mod tests {
     fn test_render_template() {
         let mut engine = Engine::new("", Duration::from_secs(60));
         engine.set_delimiters("<<", ">>");
-        let mut context = FnvHashMap::default();
-        let _ = context.insert("name".to_string(), "Alice".to_string());
-        let _ =
-            context.insert("greeting".to_string(), "Hello".to_string());
+        let mut context = Context::new();
+        context.set("name".to_string(), "Alice".to_string());
+        context.set("greeting".to_string(), "Hello".to_string());
 
         let template = "<<greeting>>, <<name>>!";
         let result =
@@ -546,7 +545,7 @@ mod tests {
     #[test]
     fn test_render_template_empty() {
         let engine = Engine::new("", Duration::from_secs(60));
-        let context = FnvHashMap::default();
+        let context = Context::new();
 
         let template = "";
         let result = engine.render_template(template, &context);
@@ -557,7 +556,7 @@ mod tests {
     fn test_render_template_invalid_syntax() {
         let mut engine = Engine::new("", Duration::from_secs(60));
         engine.set_delimiters("{{", "}}"); // Set back to default delimiters
-        let context = FnvHashMap::default();
+        let context = Context::new();
         let template = "Hello, {name}!";
         let result = engine.render_template(template, &context);
         assert!(
@@ -569,10 +568,9 @@ mod tests {
     fn test_render_template_custom_delimiters() {
         let mut engine = Engine::new("", Duration::from_secs(60));
         engine.set_delimiters("<<", ">>");
-        let mut context = FnvHashMap::default();
-        let _ = context.insert("name".to_string(), "Alice".to_string());
-        let _ =
-            context.insert("greeting".to_string(), "Hello".to_string());
+        let mut context = Context::new();
+        context.set("name".to_string(), "Alice".to_string());
+        context.set("greeting".to_string(), "Hello".to_string());
 
         let template = "<<greeting>>, <<name>>!";
         let result =
@@ -590,7 +588,7 @@ mod tests {
     #[test]
     fn test_render_template_unresolved_tag() {
         let engine = Engine::new("", Duration::from_secs(60));
-        let context = FnvHashMap::default();
+        let context = Context::new();
 
         let template = "Hello, {{name}}!";
         let result = engine.render_template(template, &context);
