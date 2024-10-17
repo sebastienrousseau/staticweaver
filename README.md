@@ -39,7 +39,7 @@ Add `staticweaver` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-staticweaver = "0.0.1"
+staticweaver = "0.0.2"
 ```
 
 ## Usage
@@ -159,5 +159,5 @@ Special thanks to all contributors who have helped build the `staticweaver` libr
 [crates-badge]: https://img.shields.io/crates/v/staticweaver.svg?style=for-the-badge&color=fc8d62&logo=rust
 [docs-badge]: https://img.shields.io/badge/docs.rs-staticweaver-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs
 [github-badge]: https://img.shields.io/badge/github-sebastienrousseau/staticweaver-8da0cb?style=for-the-badge&labelColor=555555&logo=github
-[libs-badge]: https://img.shields.io/badge/lib.rs-v0.0.1-orange.svg?style=for-the-badge
+[libs-badge]: https://img.shields.io/badge/lib.rs-v0.0.2-orange.svg?style=for-the-badge
 [made-with-rust]: https://img.shields.io/badge/rust-f04041?style=for-the-badge&labelColor=c0282d&logo=rust

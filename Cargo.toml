@@ -5,7 +5,7 @@
 [package]
 # General project metadata
 name = "staticweaver"                       # The name of the library
-version = "0.0.1"                           # Initial version of the crate
+version = "0.0.2"                           # Initial version of the crate
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
 rust-version = "1.56.0"                     # Minimum supported Rust version
@@ -33,7 +33,7 @@ categories = [
 ]
 
 # Keywords for easier discoverability on Crates.io
-keywords = ["cli", "generator", "site", "ssg", "static"]
+keywords = ["mustache", "template", "html", "web", "static"]
 
 # Excluding unnecessary files from the package
 exclude = [
@@ -94,7 +94,7 @@ reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 
 # serde_json is used for working with JSON data, which might be a common format for template context data.
-serde_json = "1.0"
+serde_json = "1.0.129"
 
 # tempfile is used to create temporary files and directories, which may be needed for template generation.
 tempfile = "3.13"
@@ -252,7 +252,7 @@ debug = false                               # Disable debug symbols in release b
 debug-assertions = false                    # Disable debug assertions
 incremental = false                         # Disable incremental compilation for optimal binary size
 lto = true                                  # Enable link-time optimization for smaller and faster binaries
-opt-level = "z"                             # Optimize for binary size
+opt-level = "s"                             # Optimize for binary size
 overflow-checks = false                     # Disable overflow checks for performance
 panic = "abort"                             # Use abort on panic for minimal overhead
 rpath = false                               # Disable rpath generation
