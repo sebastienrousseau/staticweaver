@@ -100,7 +100,7 @@ serde_json = "1.0"
 tempfile = "3.13"
 
 # thiserror is used for handling errors in a simple and clear way, especially for custom error types.
-thiserror = "1.0"
+thiserror = "2.0"
 
 # -----------------------------------------------------------------------------
 # Examples
