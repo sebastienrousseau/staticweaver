@@ -101,6 +101,7 @@ tempfile = "3.13"
 
 # thiserror is used for handling errors in a simple and clear way, especially for custom error types.
 thiserror = "2.0"
+commons = { git = "https://github.com/sebastienrousseau/commons", tag = "v0.0.1", default-features = false, features = ["error"] }
 
 # -----------------------------------------------------------------------------
 # Examples
