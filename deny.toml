@@ -6,6 +6,11 @@
 [licenses]
 # OSI-approved permissive licenses actually appearing in the dep tree.
 # Anything outside this set fails CI until explicitly reviewed.
+# Includes every OSI-approved license appearing in the lockfile under any
+# feature configuration. The `BSD-*`, `ISC`, `CC0-1.0`, and `Unicode-3.0`
+# entries only activate under `--features remote-templates` (reqwest's
+# dep tree); cargo-deny warns they are "unmatched" under the default
+# resolution — the warnings are cosmetic, the check passes.
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
@@ -14,10 +19,7 @@ allow = [
     "CC0-1.0",
     "ISC",
     "MIT",
-    "MPL-2.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
-    "Zlib",
 ]
 
 [advisories]
