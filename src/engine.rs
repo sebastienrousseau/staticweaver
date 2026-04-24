@@ -13,32 +13,14 @@ use fnv::FnvHashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-use thiserror::Error;
 
 #[cfg(feature = "remote-templates")]
 use std::{fs::File, io::Write, path::PathBuf};
 
-/// Error types specific to the engine operations.
-#[derive(Debug, Error)]
-pub enum EngineError {
-    /// I/O related errors.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
-    /// Network request related errors. Only emitted when the
-    /// `remote-templates` feature is enabled.
-    #[cfg(feature = "remote-templates")]
-    #[error("Request error: {0}")]
-    Reqwest(#[from] reqwest::Error),
-
-    /// Template rendering errors.
-    #[error("Render error: {0}")]
-    Render(String),
-
-    /// Invalid template syntax errors.
-    #[error("Invalid template: {0}")]
-    InvalidTemplate(String),
-}
+/// Canonical engine error type. Re-exported from `crate::error` to keep a
+/// single source of truth; callers can use either `staticweaver::EngineError`
+/// or `staticweaver::engine::EngineError` and pattern-match interchangeably.
+pub use crate::error::EngineError;
 
 /// Options for rendering a page template.
 ///

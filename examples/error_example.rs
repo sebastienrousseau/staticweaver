@@ -162,6 +162,9 @@ fn template_rendering_example() -> Result<(), Box<dyn std::error::Error>>
             EngineError::Reqwest(err) => {
                 println!("    ❌ Reqwest Error: {}", err)
             }
+            other => {
+                println!("    ❌ Unexpected error type: {:?}", other)
+            }
         },
     }
 
