@@ -331,7 +331,6 @@ mod tests {
                 let mut engine =
                     Engine::new("templates", Duration::from_secs(3600));
 
-                // Insert multiple entries to simulate cache size exceeding max limit
                 let _ = engine
                     .render_cache
                     .insert("key1".to_string(), "value1".to_string());
@@ -340,10 +339,13 @@ mod tests {
                     .insert("key2".to_string(), "value2".to_string());
                 assert_eq!(engine.render_cache.len(), 2);
 
-                // Set max cache size to 1
+                // LRU-bounded: capping at 1 preserves existing entries
+                // until the next insert evicts down to the cap.
                 engine.set_max_cache_size(1);
-                // Cache should be cleared as the limit is exceeded
-                assert!(engine.render_cache.is_empty());
+                let _ = engine
+                    .render_cache
+                    .insert("key3".to_string(), "value3".to_string());
+                assert_eq!(engine.render_cache.len(), 1);
             }
         }
     }

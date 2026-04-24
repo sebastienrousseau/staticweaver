@@ -552,12 +552,13 @@ impl Engine {
 
     /// Sets a maximum size for the render cache and clears the cache if it exceeds the specified limit.
     ///
-    /// This method allows you to define a maximum number of entries that can be stored in the render cache.
-    /// If the cache size exceeds this limit, the cache will be cleared to prevent unbounded memory usage.
+    /// Caps the render cache at `max_size` entries. Subsequent inserts at
+    /// or above the cap evict the least-recently-used entry automatically
+    /// — no more wholesale cache wipes.
     ///
     /// # Arguments
     ///
-    /// * `max_size` - The maximum number of cache entries allowed before the cache is cleared.
+    /// * `max_size` - The maximum number of cache entries allowed.
     ///
     /// # Examples
     ///
@@ -566,14 +567,10 @@ impl Engine {
     /// use std::time::Duration;
     ///
     /// let mut engine = Engine::new("templates", Duration::from_secs(3600));
-    ///
-    /// // Set a maximum cache size of 100 entries
     /// engine.set_max_cache_size(100);
     /// ```
     pub fn set_max_cache_size(&mut self, max_size: usize) {
-        if self.render_cache.len() > max_size {
-            self.clear_cache();
-        }
+        self.render_cache.set_capacity(max_size);
     }
 }
 
@@ -851,8 +848,13 @@ mod tests {
             .insert("key2".to_string(), "value2".to_string());
         assert_eq!(engine.render_cache.len(), 2);
 
+        // Capping at 1 doesn't wipe existing entries; subsequent inserts
+        // evict the least-recently-used entry to stay within the cap.
         engine.set_max_cache_size(1);
-        assert!(engine.render_cache.is_empty());
+        let _ = engine
+            .render_cache
+            .insert("key3".to_string(), "value3".to_string());
+        assert_eq!(engine.render_cache.len(), 1);
     }
 
     #[test]

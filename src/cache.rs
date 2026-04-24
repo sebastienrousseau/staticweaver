@@ -5,11 +5,14 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
-/// Represents a cached item with its value and expiration time.
+/// Represents a cached item with its value, expiration time, and the
+/// monotonic counter value at the entry's most recent access (used for
+/// LRU eviction when a capacity bound is hit).
 #[derive(Debug, Clone)]
 struct CachedItem<T> {
     value: T,
     expiration: Instant,
+    last_access: u64,
 }
 
 /// A simple cache implementation with expiration and optional capacity limit.
@@ -32,9 +35,14 @@ pub struct Cache<K, V> {
     items: HashMap<K, CachedItem<V>>,
     ttl: Duration,
     capacity: Option<usize>,
+    /// Monotonic counter bumped on every `get` / `insert` / `update` /
+    /// `refresh` hit. The `CachedItem::last_access` field copies the
+    /// counter's value at that moment, producing a total ordering on
+    /// usage recency without allocating a secondary index.
+    access_counter: u64,
 }
 
-impl<K: Hash + Eq, V: Clone> Cache<K, V> {
+impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
     /// Creates a new Cache with the specified time-to-live (TTL) for items.
     ///
     /// # Arguments
@@ -60,6 +68,7 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
             items: HashMap::new(),
             ttl,
             capacity: None,
+            access_counter: 0,
         }
     }
 
@@ -120,6 +129,7 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
             items: HashMap::with_capacity(capacity),
             ttl,
             capacity: Some(capacity),
+            access_counter: 0,
         }
     }
 
@@ -146,15 +156,40 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// cache.insert("key".to_string(), "value".to_string());
     /// ```
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        // If adding a *new* key would exceed capacity, evict the
+        // least-recently-used entry first. Updating an existing key is
+        // always allowed and doesn't trigger eviction. The loop handles
+        // the case where the cap was lowered below the current size —
+        // repeatedly drop the oldest entry until there's room for the
+        // new key.
         if let Some(cap) = self.capacity {
-            if self.items.len() >= cap && !self.items.contains_key(&key)
+            while self.items.len() >= cap
+                && !self.items.contains_key(&key)
             {
-                return None; // Cache is at capacity
+                let victim = self
+                    .items
+                    .iter()
+                    .min_by_key(|(_, item)| item.last_access)
+                    .map(|(k, _)| k.clone());
+                match victim {
+                    Some(k) => {
+                        let _ = self.items.remove(&k);
+                    }
+                    None => break,
+                }
             }
         }
+        self.access_counter = self.access_counter.wrapping_add(1);
         let expiration = Instant::now() + self.ttl;
         self.items
-            .insert(key, CachedItem { value, expiration })
+            .insert(
+                key,
+                CachedItem {
+                    value,
+                    expiration,
+                    last_access: self.access_counter,
+                },
+            )
             .map(|old_item| old_item.value)
     }
 
@@ -179,14 +214,21 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     ///
     /// assert_eq!(cache.get(&"key".to_string()), Some(&"value".to_string()));
     /// ```
-    pub fn get(&self, key: &K) -> Option<&V> {
-        self.items.get(key).and_then(|item| {
-            if item.expiration > Instant::now() {
-                Some(&item.value)
-            } else {
-                None
-            }
-        })
+    pub fn get(&mut self, key: &K) -> Option<&V> {
+        // Promote the entry to most-recently-used on a live hit so the
+        // LRU eviction policy actually tracks usage, not just insertion
+        // order. Expired entries are not promoted; callers get `None`
+        // and `remove_expired` will collect them on the next pass.
+        let now = Instant::now();
+        let next = self.access_counter.wrapping_add(1);
+        let item = self.items.get_mut(key)?;
+        if item.expiration > now {
+            item.last_access = next;
+            self.access_counter = next;
+            Some(&item.value)
+        } else {
+            None
+        }
     }
 
     /// Removes expired items from the cache.
@@ -296,8 +338,11 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// assert!(!cache.refresh(&"missing".to_string()));
     /// ```
     pub fn refresh(&mut self, key: &K) -> bool {
+        let next = self.access_counter.wrapping_add(1);
         if let Some(item) = self.items.get_mut(key) {
             item.expiration = Instant::now() + self.ttl;
+            item.last_access = next;
+            self.access_counter = next;
             true
         } else {
             false
@@ -354,9 +399,12 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// assert_eq!(cache.get(&"k".to_string()), Some(&"new".to_string()));
     /// ```
     pub fn update(&mut self, key: &K, value: V) -> bool {
+        let next = self.access_counter.wrapping_add(1);
         if let Some(item) = self.items.get_mut(key) {
             item.value = value;
             item.expiration = Instant::now() + self.ttl;
+            item.last_access = next;
+            self.access_counter = next;
             true
         } else {
             false
@@ -448,7 +496,7 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     }
 }
 
-impl<K: Hash + Eq, V: Clone> IntoIterator for Cache<K, V> {
+impl<K: Hash + Eq + Clone, V: Clone> IntoIterator for Cache<K, V> {
     type Item = (K, V);
     type IntoIter = std::collections::hash_map::IntoIter<K, V>;
 
@@ -463,13 +511,15 @@ impl<K: Hash + Eq, V: Clone> IntoIterator for Cache<K, V> {
     }
 }
 
-impl<K: Hash + Eq, V: Clone> Default for Cache<K, V> {
+impl<K: Hash + Eq + Clone, V: Clone> Default for Cache<K, V> {
     fn default() -> Self {
         Self::new(Duration::from_secs(60))
     }
 }
 
-impl<K: Hash + Eq, V: Clone> FromIterator<(K, V)> for Cache<K, V> {
+impl<K: Hash + Eq + Clone, V: Clone> FromIterator<(K, V)>
+    for Cache<K, V>
+{
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut cache = Self::default();
         for (k, v) in iter {
@@ -591,33 +641,57 @@ mod tests {
     }
 
     #[test]
-    fn test_set_capacity() {
+    fn test_set_capacity_evicts_lru_on_overflow() {
         let mut cache: Cache<String, String> =
             Cache::new(Duration::from_secs(60));
         cache.set_capacity(2);
 
-        assert_eq!(
-            cache.insert("key1".to_string(), "1".to_string()),
-            None
-        );
-        assert_eq!(
-            cache.insert("key2".to_string(), "2".to_string()),
-            None
-        );
-        assert_eq!(
-            cache.insert("key3".to_string(), "3".to_string()),
-            None
-        );
+        let _ = cache.insert("key1".to_string(), "1".to_string());
+        let _ = cache.insert("key2".to_string(), "2".to_string());
+        // Third insert at capacity evicts the oldest entry (`key1`).
+        let _ = cache.insert("key3".to_string(), "3".to_string());
 
         assert_eq!(
             cache.get(&"key1".to_string()),
-            Some(&"1".to_string())
+            None,
+            "oldest entry must be evicted under LRU"
         );
         assert_eq!(
             cache.get(&"key2".to_string()),
             Some(&"2".to_string())
         );
-        assert_eq!(cache.get(&"key3".to_string()), None);
+        assert_eq!(
+            cache.get(&"key3".to_string()),
+            Some(&"3".to_string())
+        );
+    }
+
+    #[test]
+    fn lru_promotes_on_get() {
+        let mut cache: Cache<String, String> =
+            Cache::new(Duration::from_secs(60));
+        cache.set_capacity(2);
+
+        let _ = cache.insert("k1".to_string(), "1".to_string());
+        let _ = cache.insert("k2".to_string(), "2".to_string());
+
+        // Touch k1 — now k2 is the oldest.
+        assert_eq!(
+            cache.get(&"k1".to_string()),
+            Some(&"1".to_string())
+        );
+
+        // Inserting k3 should evict k2, not k1.
+        let _ = cache.insert("k3".to_string(), "3".to_string());
+        assert_eq!(
+            cache.get(&"k1".to_string()),
+            Some(&"1".to_string())
+        );
+        assert_eq!(cache.get(&"k2".to_string()), None);
+        assert_eq!(
+            cache.get(&"k3".to_string()),
+            Some(&"3".to_string())
+        );
     }
 
     #[test]
@@ -697,7 +771,8 @@ mod tests {
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
         ];
-        let cache: Cache<String, String> = items.into_iter().collect();
+        let mut cache: Cache<String, String> =
+            items.into_iter().collect();
         assert_eq!(
             cache.get(&"key1".to_string()),
             Some(&"value1".to_string())
