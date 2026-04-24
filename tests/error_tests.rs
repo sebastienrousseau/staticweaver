@@ -1,6 +1,8 @@
 // Copyright © 2024 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! Integration tests for `EngineError` and `TemplateError` variants.
+
 use staticweaver::EngineError;
 use staticweaver::TemplateError;
 
