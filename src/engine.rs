@@ -220,7 +220,29 @@ impl Engine {
         let mut rest = template;
 
         while let Some(start) = rest.find(open) {
-            output.push_str(&rest[..start]);
+            // Count the run of backslashes immediately preceding `start`.
+            // An odd count leaves one backslash active -> the delimiter
+            // is escaped (emitted literally, no tag lookup). An even
+            // count means every backslash is paired and cancels; the
+            // delimiter is a real tag opener.
+            let bytes = rest.as_bytes();
+            let mut bs = 0usize;
+            while start > bs && bytes[start - bs - 1] == b'\\' {
+                bs += 1;
+            }
+            let text_end = start - bs;
+            output.push_str(&rest[..text_end]);
+            // Every pair of backslashes collapses to a single literal.
+            for _ in 0..bs / 2 {
+                output.push('\\');
+            }
+            if bs % 2 == 1 {
+                // Odd -> emit the delimiter literally and continue.
+                output.push_str(open);
+                rest = &rest[start + open.len()..];
+                continue;
+            }
+
             let after_open = &rest[start + open.len()..];
 
             let end = after_open.find(close).ok_or_else(|| {
@@ -670,6 +692,42 @@ mod tests {
         let result =
             engine.render_template("Hi {{ name }}", &context).unwrap();
         assert_eq!(result, "Hi Alice");
+    }
+
+    #[test]
+    fn backslash_escapes_opening_delimiter() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Alice".to_string());
+        // Escaped: literal, no lookup.
+        let out = engine
+            .render_template(
+                "literal \\{{name}} and real {{name}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "literal {{name}} and real Alice");
+    }
+
+    #[test]
+    fn double_backslash_escapes_the_backslash_itself() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Alice".to_string());
+        // `\\{{name}}` -> emit one backslash, then substitute.
+        let out =
+            engine.render_template("path\\\\{{name}}", &ctx).unwrap();
+        assert_eq!(out, "path\\Alice");
+    }
+
+    #[test]
+    fn escape_does_not_leak_into_missing_key_error() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        // `{{missing}}` without escape still errors.
+        let result =
+            engine.render_template("\\{{literal}} {{missing}}", &ctx);
+        assert!(matches!(result, Err(EngineError::Render(_))));
     }
 
     #[test]
