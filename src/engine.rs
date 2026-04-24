@@ -191,9 +191,7 @@ impl Engine {
             || layout.contains('/')
             || layout.contains('\\')
             || layout.contains('\0')
-            || layout
-                .split(|c| c == '/' || c == '\\')
-                .any(|seg| seg == "..")
+            || layout.split(['/', '\\']).any(|seg| seg == "..")
         {
             return Err(EngineError::InvalidTemplate(format!(
                 "invalid layout name: {layout:?}"

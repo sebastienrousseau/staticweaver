@@ -117,6 +117,8 @@ path = "examples/error_example.rs"      # Path to the example code
 name = "lib_example"                    # Name of the example
 path = "examples/lib_example.rs"        # Path to the example code
 
+# (Removed redundant `example` binary that only re-imported the others.)
+
 # -----------------------------------------------------------------------------
 # Criterion Benchmark
 # -----------------------------------------------------------------------------
@@ -169,7 +171,6 @@ future_incompatible = { level = "deny", priority = -1 } # Handle future compatib
 keyword_idents = { level = "deny", priority = -1 }      # Deny usage of keywords as identifiers
 macro_use_extern_crate = "deny"             # Deny macro use of `extern crate`
 meta_variable_misuse = "deny"               # Deny misuse of meta variables in macros
-missing_fragment_specifier = "deny"         # Deny missing fragment specifiers in macros
 noop_method_call = "deny"                   # Deny method calls that have no effect
 rust_2018_idioms = { level = "deny", priority = -1 }    # Enforce Rust 2018 idioms
 rust_2021_compatibility = { level = "deny", priority = -1 } # Enforce Rust 2021 compatibility
@@ -185,36 +186,16 @@ unused_macro_rules = "deny"                 # Deny unused macros
 unused_qualifications = "deny"              # Deny unnecessary type qualifications
 variant_size_differences = "deny"           # Deny enum variants with significant size differences
 
-# -----------------------------------------------------------------------------
-# Clippy Configuration
-# -----------------------------------------------------------------------------
-[package.metadata.clippy]
-# Clippy lint configuration for enhanced code analysis.
-warn-lints = [
-    "clippy::all",                           # Enable all common Clippy lints
-    "clippy::pedantic",                      # Enable pedantic lints for stricter checking
-    "clippy::cargo",                         # Enable lints specific to cargo
-    "clippy::nursery",                       # Enable experimental lints from Clippy’s nursery
-    "clippy::complexity",                    # Warn on code complexity and suggest improvements
-    "clippy::correctness",                   # Ensure code correctness, flagging potential issues
-    "clippy::perf",                          # Lints that catch performance issues
-    "clippy::style",                         # Suggest stylistic improvements
-    "clippy::suspicious",                    # Detect suspicious code patterns
-    "clippy::module_name_repetitions",       # Avoid repeating module names in the crate name
-]
-
-# Customize Clippy to allow certain less critical lints.
-allow-lints = [
-    "clippy::module_inception",              # Allow modules with the same name as their parents
-    "clippy::too_many_arguments",            # Allow functions with more than 7 arguments if justified
-    "clippy::missing_docs_in_private_items", # Skip requiring documentation for private items
-]
-
-# Enforce specific warnings and errors more strictly.
-deny-lints = [
-    "clippy::unwrap_used",                   # Deny the use of unwrap to ensure error handling
-    "clippy::expect_used",                   # Deny the use of expect to avoid improper error handling
-]
+# Clippy `all` is already warn by default; we list it explicitly so future
+# contributors see where to add lints. Pedantic/nursery are intentionally
+# left off — they generate churn that belongs in a follow-up rather than
+# red-lining CI on every `-D warnings` build.
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+module_inception = "allow"
+module_name_repetitions = "allow"
+missing_docs_in_private_items = "allow"
+too_many_arguments = "allow"
 
 # -----------------------------------------------------------------------------
 # Profiles
