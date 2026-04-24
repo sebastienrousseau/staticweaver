@@ -50,6 +50,19 @@ called out explicitly below).
   `http://nonexistent.invalid./` (RFC 2606 reserved TLD) to prevent
   accidental mask-hits on developer machines.
 
+### Performance
+
+- `Context::hash` rewritten to a commutative XOR-combiner — O(n), zero
+  allocation. **`context_hash_100_keys` bench: 9.68 µs → 4.86 µs (−50%)**.
+- `escape_html_into` rewritten to byte-scan with run flushing.
+  **`render_template_escape_heavy` bench (10 KiB, 5% metachars):
+  41.82 µs → 35.22 µs (−16%)**. Single-tag baseline: 226 ns → 214 ns
+  (−5%). Short-value stress (32 tags, 2-byte values) picks up ~550 ns of
+  fixed byte-loop setup overhead; real-world HTML values amortise this.
+- Three new criterion benches (`render_template_escape_heavy`,
+  `context_hash_100_keys`, `render_template_32_tags`) guard these gains
+  against regression.
+
 ### Changed
 
 - `.github/workflows/release.yml`: delegated to

@@ -613,18 +613,29 @@ fn is_url(path: &str) -> bool {
 /// Appends `s` to `out`, replacing the five HTML metacharacters with their
 /// named/numeric entities. Single-quote uses the numeric `&#x27;` form so
 /// the output stays valid inside both HTML and XML attributes.
+///
+/// Byte-level scan: iterate over `s.as_bytes()`, flush clean runs via
+/// `push_str`, substitute only the five ASCII metacharacters. Valid UTF-8
+/// guarantees any byte `<= 0x7F` sits on a char boundary, so slicing at
+/// those positions is always valid UTF-8 — no `unsafe` required.
 fn escape_html_into(s: &str, out: &mut String) {
     out.reserve(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            _ => out.push(c),
-        }
+    let bytes = s.as_bytes();
+    let mut last = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        let entity: &str = match b {
+            b'&' => "&amp;",
+            b'<' => "&lt;",
+            b'>' => "&gt;",
+            b'"' => "&quot;",
+            b'\'' => "&#x27;",
+            _ => continue,
+        };
+        out.push_str(&s[last..i]);
+        out.push_str(entity);
+        last = i + 1;
     }
+    out.push_str(&s[last..]);
 }
 
 #[cfg(test)]

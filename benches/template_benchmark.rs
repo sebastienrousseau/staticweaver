@@ -1,13 +1,15 @@
-// Copyright © 2024 StaticWeaver. All rights reserved.
+// Copyright © 2024-2026 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 #![allow(missing_docs)]
 
-//! # Template Benchmark
+//! Criterion benches for the `staticweaver` template engine.
 //!
-//! This benchmark measures the performance of the `staticweaver` template rendering engine.
-//! It uses the `Criterion` library to run benchmarks and measure the time taken to render
-//! templates using various contexts and cached templates.
+//! Four scenarios:
+//!   * `render_template`              - one tag, short template (baseline)
+//!   * `render_template_escape_heavy` - 10 KiB value, 5% HTML metacharacters
+//!   * `context_hash_100_keys`        - exercises `Context::hash`
+//!   * `render_template_32_tags`      - exercises the scan loop
 
 use criterion::{
     black_box, criterion_group, criterion_main, Criterion,
@@ -15,43 +17,107 @@ use criterion::{
 use staticweaver::{Context, Engine};
 use std::time::Duration;
 
-/// The template string used for benchmarking.
+/// The template string used for the baseline bench.
 const TEMPLATE: &str = "<html><body>{{name}}</body></html>";
 
-/// Creates a context for benchmarking.
-fn create_benchmark_context() -> Context {
-    let mut context = Context::new();
-    context.set("name".to_string(), "Alice".to_string());
-    context
+fn make_ctx_one() -> Context {
+    let mut c = Context::new();
+    c.set("name".to_string(), "Alice".to_string());
+    c
 }
 
-/// Renders a template for benchmarking.
-fn render_template(
-    engine: &Engine,
-    template: &str,
-    context: &Context,
-) -> String {
-    engine
-        .render_template(black_box(template), black_box(context))
-        .expect("Failed to render template")
-}
-
-/// Benchmarks the performance of the template rendering engine by rendering a template with different contexts.
 fn benchmark_template_rendering(c: &mut Criterion) {
     let engine = Engine::new("dummy_path", Duration::from_secs(60));
-
-    let _ = c.bench_function("template_rendering", |b| {
+    let _ = c.bench_function("render_template", |b| {
         b.iter_batched_ref(
-            create_benchmark_context,
-            |context| {
-                let _ = black_box(render_template(
-                    &engine, TEMPLATE, context,
-                ));
+            make_ctx_one,
+            |ctx| {
+                let _ = black_box(
+                    engine
+                        .render_template(
+                            black_box(TEMPLATE),
+                            black_box(ctx),
+                        )
+                        .expect("render"),
+                );
             },
             criterion::BatchSize::SmallInput,
         )
     });
 }
 
-criterion_group!(benches, benchmark_template_rendering);
+/// 10 KiB payload with ~5% of bytes being HTML metacharacters.
+fn benchmark_escape_heavy(c: &mut Criterion) {
+    let engine = Engine::new("", Duration::from_secs(60));
+
+    let body: String = (0..10_000)
+        .map(|i| match i % 20 {
+            0 => '<',
+            1 => '>',
+            2 => '&',
+            _ => 'x',
+        })
+        .collect();
+
+    let mut ctx = Context::new();
+    ctx.set("body".to_string(), body);
+
+    let _ = c.bench_function("render_template_escape_heavy", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_template(
+                        black_box("<div>{{body}}</div>"),
+                        black_box(&ctx),
+                    )
+                    .expect("render"),
+            );
+        });
+    });
+}
+
+/// Context with 100 keys — dominates `render_page` cache-key construction.
+fn benchmark_context_hash(c: &mut Criterion) {
+    let mut ctx = Context::new();
+    for i in 0..100 {
+        ctx.set(format!("key{i:03}"), format!("value{i:03}"));
+    }
+
+    let _ = c.bench_function("context_hash_100_keys", |b| {
+        b.iter(|| black_box(ctx.hash()));
+    });
+}
+
+/// Template with 32 tags — stresses the delimiter-scan loop.
+fn benchmark_many_tags(c: &mut Criterion) {
+    let engine = Engine::new("", Duration::from_secs(60));
+
+    let mut tmpl = String::new();
+    for i in 0..32 {
+        tmpl.push_str(&format!("{{{{k{i}}}}} "));
+    }
+
+    let mut ctx = Context::new();
+    for i in 0..32 {
+        ctx.set(format!("k{i}"), format!("v{i}"));
+    }
+
+    let _ = c.bench_function("render_template_32_tags", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_template(black_box(&tmpl), black_box(&ctx))
+                    .expect("render"),
+            );
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    benchmark_template_rendering,
+    benchmark_escape_heavy,
+    benchmark_context_hash,
+    benchmark_many_tags,
+);
 criterion_main!(benches);

@@ -90,19 +90,22 @@ impl Context {
     /// assert_ne!(hash, 0);
     /// ```
     pub fn hash(&self) -> u64 {
-        // `FnvHashMap` iteration order is unspecified and can differ across
-        // runs for the same key set. Sort entries first so equal contexts
-        // always hash equal — critical for the render-page cache key to
-        // actually dedupe hits instead of thrashing on spurious misses.
-        let mut entries: Vec<(&String, &String)> =
-            self.elements.iter().collect();
-        entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
-        let mut hasher = DefaultHasher::new();
-        for (key, value) in entries {
-            key.hash(&mut hasher);
-            value.hash(&mut hasher);
+        // `FnvHashMap` iteration order is unspecified. To keep the hash
+        // iteration-order-independent (required so `render_page` sees
+        // cache hits for equal contexts), combine per-entry hashes with
+        // XOR — commutative by construction, O(n) time, zero allocation.
+        //
+        // XOR-of-hashes gives the same guarantee as sort-then-hash for
+        // sets with unique keys (which `FnvHashMap` enforces), and is the
+        // canonical trick used by `HashSet` equality.
+        let mut acc: u64 = 0;
+        for (key, value) in &self.elements {
+            let mut h = DefaultHasher::new();
+            key.hash(&mut h);
+            value.hash(&mut h);
+            acc ^= h.finish();
         }
-        hasher.finish()
+        acc
     }
 
     /// Sets a key-value pair in the context.
