@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 OR MIT -->
 
 <p align="center">
-  <img src="https://kura.pro/staticweaver/images/logos/staticweaver.svg" alt="StaticWeaver logo" width="128" />
+  <img src="https://cloudcdn.pro/staticweaver/v1/logos/staticweaver.svg" alt="StaticWeaver logo" width="128" />
 </p>
 
 <h1 align="center">StaticWeaver</h1>

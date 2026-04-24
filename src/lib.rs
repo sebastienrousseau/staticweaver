@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 #![doc = include_str!("../README.md")]
 #![doc(
-    html_favicon_url = "https://kura.pro/staticweaver/images/favicon.ico",
-    html_logo_url = "https://kura.pro/staticweaver/images/logos/staticweaver.svg",
+    html_favicon_url = "https://cloudcdn.pro/staticweaver/v1/favicon.ico",
+    html_logo_url = "https://cloudcdn.pro/staticweaver/v1/logos/staticweaver.svg",
     html_root_url = "https://docs.rs/staticweaver"
 )]
 #![crate_name = "staticweaver"]

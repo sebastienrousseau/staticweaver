@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD033 MD041 -->
-<img src="https://kura.pro/staticweaver/images/logos/staticweaver.svg"
+<img src="https://cloudcdn.pro/staticweaver/v1/logos/staticweaver.svg"
 alt="StaticWeaver logo" height="66" align="right" />
 <!-- markdownlint-enable MD033 MD041 -->
 
