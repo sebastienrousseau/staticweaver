@@ -26,7 +26,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Cross-platform sanity check before publishing. Library crates don't
+  # ship per-OS binaries, but a Linux-only release has historically hidden
+  # platform-specific regressions (path separators, TLS backends, …) that
+  # only surface when a consumer builds on macOS/Windows. Runs the same
+  # `cargo test --all-features` our CI runs, on all three host OSes.
+  verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-verify-${{ matrix.os }}
+          save-if: false
+      - run: cargo test --all-features
+        shell: bash
+
   release:
+    needs: verify
     uses: sebastienrousseau/pipelines/.github/workflows/release.yml@99a39f7d02e76beb2b935fa07b7cd6a46d8bbc65
     with:
       language: rust

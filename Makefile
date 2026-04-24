@@ -42,9 +42,10 @@ format-check-verbose: ensure-rustfmt ## Check code formatting with verbose outpu
 	@echo "Checking code format with verbose output..."
 	@cargo fmt --all -- --check --verbose
 
-# Apply fixes to the project using cargo fix, install cargo-fix if necessary.
+# Apply fixes to the project using cargo fix. `cargo fix` ships with the
+# toolchain — no component to install.
 .PHONY: fix
-fix: ensure-cargo-fix ## Automatically fix Rust lint warnings using cargo fix.
+fix: ## Automatically fix Rust lint warnings using cargo fix.
 	@echo "Applying cargo fix..."
 	@cargo fix --all
 
@@ -60,16 +61,25 @@ outdated: ensure-cargo-outdated ## Check for outdated dependencies for the root 
 	@echo "Checking for outdated dependencies..."
 	@cargo outdated --root-deps-only
 
+# One-shot bootstrap for a fresh clone. Safe to re-run.
+.PHONY: init
+init: ## Bootstrap: install git hooks + toolchain components.
+	@echo "Pointing git at repo-local hooks..."
+	@git config core.hooksPath .githooks
+	@chmod +x .githooks/* 2>/dev/null || true
+	@echo "Verifying rust toolchain..."
+	@cargo --version
+	@cargo fmt --version || rustup component add rustfmt
+	@cargo clippy --version || rustup component add clippy
+	@echo "Done. Run 'make' to list targets."
+
 # Installation checks and setups
-.PHONY: ensure-clippy ensure-rustfmt ensure-cargo-fix ensure-cargo-deny ensure-cargo-outdated
+.PHONY: ensure-clippy ensure-rustfmt ensure-cargo-deny ensure-cargo-outdated
 ensure-clippy:
 	@cargo clippy --version || rustup component add clippy
 
 ensure-rustfmt:
 	@cargo fmt --version || rustup component add rustfmt
-
-ensure-cargo-fix:
-	@cargo fix --version || rustup component add rustfix
 
 ensure-cargo-deny:
 	@command -v cargo-deny || cargo install cargo-deny

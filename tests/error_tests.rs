@@ -27,8 +27,12 @@ mod template_error_tests {
     #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest() {
+        // `.invalid` is reserved by RFC 2606 — DNS resolution is
+        // guaranteed to fail on every platform, so this never matches a
+        // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://localhost:1").unwrap_err();
+            reqwest::blocking::get("http://nonexistent.invalid./")
+                .unwrap_err();
         let template_error = TemplateError::Reqwest(reqwest_error);
         assert!(matches!(template_error, TemplateError::Reqwest(_)));
     }
@@ -75,8 +79,12 @@ mod template_error_tests {
     #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest_display() {
+        // `.invalid` is reserved by RFC 2606 — DNS resolution is
+        // guaranteed to fail on every platform, so this never matches a
+        // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://localhost:1").unwrap_err();
+            reqwest::blocking::get("http://nonexistent.invalid./")
+                .unwrap_err();
         let template_error = TemplateError::Reqwest(reqwest_error);
         assert!(
             format!("{}", template_error).starts_with("Request error:")
@@ -104,8 +112,12 @@ mod additional_template_error_tests {
     #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest_chaining() {
+        // `.invalid` is reserved by RFC 2606 — DNS resolution is
+        // guaranteed to fail on every platform, so this never matches a
+        // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://localhost:1").unwrap_err();
+            reqwest::blocking::get("http://nonexistent.invalid./")
+                .unwrap_err();
         let template_error = TemplateError::from(reqwest_error);
         assert!(matches!(template_error, TemplateError::Reqwest(_)));
     }
@@ -143,8 +155,12 @@ mod additional_template_error_tests {
     fn test_template_error_conversion_consistency() {
         let io_error: io::Error =
             io::ErrorKind::PermissionDenied.into();
+        // `.invalid` is reserved by RFC 2606 — DNS resolution is
+        // guaranteed to fail on every platform, so this never matches a
+        // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://localhost:1").unwrap_err();
+            reqwest::blocking::get("http://nonexistent.invalid./")
+                .unwrap_err();
 
         let io_template_error = TemplateError::from(io_error);
         let reqwest_template_error = TemplateError::from(reqwest_error);
