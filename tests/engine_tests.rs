@@ -93,8 +93,27 @@ mod tests {
         }
 
         #[test]
-        fn test_engine_render_special_characters_in_context() {
+        fn test_engine_render_special_characters_escaped_by_default() {
             let engine = create_engine();
+            let mut context = FnvHashMap::default();
+            let _ = context.insert(
+                "name".to_string(),
+                "<script>alert('XSS')</script>".to_string(),
+            );
+            let _ =
+                context.insert("greeting".to_string(), "&".to_string());
+            let template = "{{greeting}} {{name}}";
+            assert_template_rendering(
+                &engine,
+                template,
+                &context,
+                Ok("&amp; &lt;script&gt;alert(&#x27;XSS&#x27;)&lt;/script&gt;"),
+            );
+        }
+
+        #[test]
+        fn test_engine_render_special_characters_raw_when_disabled() {
+            let engine = create_engine().with_html_escape(false);
             let mut context = FnvHashMap::default();
             let _ = context.insert(
                 "name".to_string(),

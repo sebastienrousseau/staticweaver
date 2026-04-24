@@ -123,10 +123,14 @@ pub struct Engine {
     pub open_delim: String,
     /// Closing delimiter for template tags.
     pub close_delim: String,
+    /// When true, values substituted into templates are HTML-escaped
+    /// (`&`, `<`, `>`, `"`, `'`). Prefix a key with `!` to opt out per-tag
+    /// (e.g. `{{!content}}` emits the raw value).
+    pub escape_html: bool,
 }
 
 impl Engine {
-    /// Creates a new `Engine` instance.
+    /// Creates a new `Engine` instance with HTML escaping enabled.
     ///
     /// # Arguments
     ///
@@ -148,7 +152,18 @@ impl Engine {
             render_cache: Cache::new(cache_ttl),
             open_delim: "{{".to_string(),
             close_delim: "}}".to_string(),
+            escape_html: true,
         }
+    }
+
+    /// Toggles HTML escaping for substituted values. Returns `self` for
+    /// builder-style chaining. Escaping is on by default; disable it only
+    /// when the engine is used to render non-HTML output or when the caller
+    /// escapes values themselves.
+    #[must_use]
+    pub fn with_html_escape(mut self, enable: bool) -> Self {
+        self.escape_html = enable;
+        self
     }
 
     /// Renders a page using the specified layout and context, with caching.
@@ -185,6 +200,22 @@ impl Engine {
         context: &Context,
         layout: &str,
     ) -> Result<String, EngineError> {
+        // Reject any layout name that could escape the template directory.
+        // Callers pass values like `"post"` or `"default"`; slashes, drive
+        // letters, null bytes, and `..` segments are never legitimate here.
+        if layout.is_empty()
+            || layout.contains('/')
+            || layout.contains('\\')
+            || layout.contains('\0')
+            || layout
+                .split(|c| c == '/' || c == '\\')
+                .any(|seg| seg == "..")
+        {
+            return Err(EngineError::InvalidTemplate(format!(
+                "invalid layout name: {layout:?}"
+            )));
+        }
+
         let cache_key = format!("{}:{}", layout, context.hash());
 
         // Return cached result if available
@@ -194,7 +225,7 @@ impl Engine {
 
         // Attempt to read the layout template from the file system
         let template_path = Path::new(&self.template_path)
-            .join(format!("{}.html", layout));
+            .join(format!("{layout}.html"));
         let template_content = fs::read_to_string(&template_path)?;
 
         // Render the template with the provided context
@@ -250,50 +281,53 @@ impl Engine {
             ));
         }
 
-        // Check for single delimiters
-        if template.contains(&self.open_delim[..1])
-            && !template.contains(&self.open_delim)
-        {
-            return Err(EngineError::InvalidTemplate(format!(
-                "Invalid template syntax: single '{}' are not allowed",
-                &self.open_delim[..1]
-            )));
-        }
-
+        let open = self.open_delim.as_str();
+        let close = self.close_delim.as_str();
         let mut output = String::with_capacity(template.len());
-        let mut last_end = 0;
-        let mut depth = 0;
+        let mut rest = template;
 
-        for (idx, _) in template.match_indices(&self.open_delim) {
-            if depth > 0 {
+        while let Some(start) = rest.find(open) {
+            output.push_str(&rest[..start]);
+            let after_open = &rest[start + open.len()..];
+
+            let end = after_open.find(close).ok_or_else(|| {
+                EngineError::InvalidTemplate(
+                    "Unclosed template tag".to_string(),
+                )
+            })?;
+
+            let key_raw = &after_open[..end];
+
+            // Reject an opening delimiter inside the key — catches both
+            // nested tags and malformed input like `{{foo{{bar}}}}`.
+            if key_raw.contains(open) {
                 return Err(EngineError::InvalidTemplate(
                     "Nested delimiters are not allowed".to_string(),
                 ));
             }
-            depth += 1;
-            output.push_str(&template[last_end..idx]);
-            if let Some(end) = template[idx..].find(&self.close_delim) {
-                let key =
-                    &template[idx + self.open_delim.len()..idx + end];
-                if let Some(value) = context.get(key) {
-                    output.push_str(value);
-                } else {
-                    return Err(EngineError::Render(format!(
-                        "Unresolved template tag: {}",
-                        key
-                    )));
-                }
-                last_end = idx + end + self.close_delim.len();
-                depth -= 1;
+
+            let key_trimmed = key_raw.trim();
+            let (lookup, raw) = match key_trimmed.strip_prefix('!') {
+                Some(stripped) => (stripped.trim_start(), true),
+                None => (key_trimmed, false),
+            };
+
+            let value = context.get(lookup).ok_or_else(|| {
+                EngineError::Render(format!(
+                    "Unresolved template tag: {lookup}"
+                ))
+            })?;
+
+            if raw || !self.escape_html {
+                output.push_str(value);
             } else {
-                return Err(EngineError::InvalidTemplate(
-                    "Unclosed template tag".to_string(),
-                ));
+                escape_html_into(value, &mut output);
             }
+
+            rest = &after_open[end + close.len()..];
         }
 
-        output.push_str(&template[last_end..]);
-
+        output.push_str(rest);
         Ok(output)
     }
 
@@ -523,6 +557,23 @@ fn is_url(path: &str) -> bool {
     path.starts_with("http://") || path.starts_with("https://")
 }
 
+/// Appends `s` to `out`, replacing the five HTML metacharacters with their
+/// named/numeric entities. Single-quote uses the numeric `&#x27;` form so
+/// the output stays valid inside both HTML and XML attributes.
+fn escape_html_into(s: &str, out: &mut String) {
+    out.reserve(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            _ => out.push(c),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,15 +604,27 @@ mod tests {
     }
 
     #[test]
-    fn test_render_template_invalid_syntax() {
+    fn test_render_template_bare_open_char_is_literal() {
+        // A single `{` with no matching `{{` is literal text, not an error.
+        // Previously rejected by a broken heuristic.
         let mut engine = Engine::new("", Duration::from_secs(60));
-        engine.set_delimiters("{{", "}}"); // Set back to default delimiters
+        engine.set_delimiters("{{", "}}");
         let context = Context::new();
         let template = "Hello, {name}!";
         let result = engine.render_template(template, &context);
-        assert!(
-            matches!(result, Err(EngineError::InvalidTemplate(msg)) if msg.contains("single '{'"))
-        );
+        assert_eq!(result.unwrap(), "Hello, {name}!");
+    }
+
+    #[test]
+    fn test_render_template_nested_delimiters_rejected() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let context = Context::new();
+        let template = "{{outer{{inner}}}}";
+        let result = engine.render_template(template, &context);
+        assert!(matches!(
+            result,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("Nested")
+        ));
     }
 
     #[test]
@@ -577,12 +640,72 @@ mod tests {
             engine.render_template(template, &context).unwrap();
         assert_eq!(result, "Hello, Alice!");
 
-        // Test invalid syntax with custom delimiters
-        let invalid_template = "Hello, <name>!";
-        let result = engine.render_template(invalid_template, &context);
-        assert!(
-            matches!(result, Err(EngineError::InvalidTemplate(msg)) if msg.contains("single '<'"))
+        // Bare `<` is literal text under the new parser.
+        let literal_template = "Hello, <name>!";
+        let result =
+            engine.render_template(literal_template, &context).unwrap();
+        assert_eq!(result, "Hello, <name>!");
+    }
+
+    #[test]
+    fn test_render_template_escapes_html_by_default() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut context = Context::new();
+        context.set(
+            "name".to_string(),
+            "<script>alert('x')</script>".to_string(),
         );
+        let result =
+            engine.render_template("Hi {{name}}", &context).unwrap();
+        assert_eq!(
+            result,
+            "Hi &lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn test_render_template_raw_opt_out() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut context = Context::new();
+        context.set("body".to_string(), "<b>hi</b>".to_string());
+        let result =
+            engine.render_template("{{!body}}", &context).unwrap();
+        assert_eq!(result, "<b>hi</b>");
+    }
+
+    #[test]
+    fn test_render_template_escaping_disabled() {
+        let engine = Engine::new("", Duration::from_secs(60))
+            .with_html_escape(false);
+        let mut context = Context::new();
+        context.set("body".to_string(), "<b>hi</b>".to_string());
+        let result =
+            engine.render_template("{{body}}", &context).unwrap();
+        assert_eq!(result, "<b>hi</b>");
+    }
+
+    #[test]
+    fn test_render_template_whitespace_around_key() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut context = Context::new();
+        context.set("name".to_string(), "Alice".to_string());
+        let result =
+            engine.render_template("Hi {{ name }}", &context).unwrap();
+        assert_eq!(result, "Hi Alice");
+    }
+
+    #[test]
+    fn test_render_page_rejects_path_traversal() {
+        let mut engine =
+            Engine::new("templates", Duration::from_secs(60));
+        let context = Context::new();
+        for bad in ["../etc/passwd", "a/b", "a\\b", ""] {
+            let result = engine.render_page(&context, bad);
+            assert!(
+                matches!(result, Err(EngineError::InvalidTemplate(_))),
+                "expected rejection for {bad:?}"
+            );
+        }
     }
 
     #[test]
