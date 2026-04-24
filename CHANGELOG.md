@@ -79,6 +79,13 @@ called out explicitly below).
 - Orphaned `.deepsource.toml` (no DeepSource integration was wired up).
 - Duplicate `.github/CODE-OF-CONDUCT.md` + `.github/SECURITY.md` (root
   versions are canonical).
+- **`PageOptions`** — dead code. Never wired into `render_page` /
+  `render_template`, duplicated `Context`'s `FnvHashMap<String, String>`
+  shape with no unique behaviour. Removed along with the
+  `engine::PageOptions` module path and the top-level
+  `staticweaver::PageOptions` re-export. **Breaking** for any caller that
+  imported it; use `Context` directly, which is the type actually
+  consumed by the engine.
 
 ## [0.0.2] - 2026-04-24
 

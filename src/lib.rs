@@ -26,7 +26,7 @@ pub mod error;
 pub mod cache;
 
 pub use context::Context;
-pub use engine::{Engine, PageOptions};
+pub use engine::Engine;
 pub use error::{EngineError, TemplateError};
 
 /// Prelude module for convenient imports

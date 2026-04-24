@@ -4,12 +4,10 @@
 //! # Engine Module
 //!
 //! This module provides the core functionality for the StaticWeaver templating engine.
-//! It includes the `Engine` struct for rendering templates and the `PageOptions` struct
-//! for configuring page rendering options.
+//! It contains the `Engine` struct for rendering templates against a `Context`.
 
 use crate::cache::Cache;
 use crate::context::Context;
-use fnv::FnvHashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -21,90 +19,6 @@ use std::{fs::File, io::Write, path::PathBuf};
 /// single source of truth; callers can use either `staticweaver::EngineError`
 /// or `staticweaver::engine::EngineError` and pattern-match interchangeably.
 pub use crate::error::EngineError;
-
-/// Options for rendering a page template.
-///
-/// This struct contains the options for rendering a page template.
-/// These options are used to construct a context `FnvHashMap` that is
-/// passed to the `render_template` function.
-///
-/// # Examples
-///
-/// ```
-/// use staticweaver::engine::PageOptions;
-///
-/// let mut options = PageOptions::new();
-/// options.set("title".to_string(), "Home".to_string());
-/// assert_eq!(options.get("title"), Some(&"Home".to_string()));
-/// ```
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
-pub struct PageOptions {
-    /// Elements of the page
-    pub elements: FnvHashMap<String, String>,
-}
-
-impl PageOptions {
-    /// Creates a new `PageOptions` instance.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use staticweaver::engine::PageOptions;
-    ///
-    /// let options = PageOptions::new();
-    /// assert!(options.elements.is_empty());
-    /// ```
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets a page option in the `elements` map.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key for the option.
-    /// * `value` - The value for the option.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use staticweaver::engine::PageOptions;
-    ///
-    /// let mut options = PageOptions::new();
-    /// options.set("title".to_string(), "My Page".to_string());
-    /// assert_eq!(options.get("title"), Some(&"My Page".to_string()));
-    /// ```
-    pub fn set(&mut self, key: String, value: String) {
-        let _ = self.elements.insert(key, value);
-    }
-
-    /// Retrieves a page option from the `elements` map.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key of the option to retrieve.
-    ///
-    /// # Returns
-    ///
-    /// An `Option` containing a reference to the value if the key exists,
-    /// or `None` if it doesn't.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use staticweaver::engine::PageOptions;
-    ///
-    /// let mut options = PageOptions::new();
-    /// options.set("title".to_string(), "My Page".to_string());
-    /// assert_eq!(options.get("title"), Some(&"My Page".to_string()));
-    /// assert_eq!(options.get("nonexistent"), None);
-    /// ```
-    #[must_use]
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.elements.get(key)
-    }
-}
 
 /// The main template rendering engine.
 ///
@@ -788,14 +702,6 @@ mod tests {
         assert!(is_url("https://example.com"));
         assert!(!is_url("file:///path/to/file"));
         assert!(!is_url("/local/path"));
-    }
-
-    #[test]
-    fn test_page_options() {
-        let mut options = PageOptions::new();
-        options.set("title".to_string(), "My Page".to_string());
-        assert_eq!(options.get("title"), Some(&"My Page".to_string()));
-        assert_eq!(options.get("non_existent"), None);
     }
 
     #[test]

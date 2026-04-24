@@ -7,7 +7,7 @@
 mod tests {
     use fnv::FnvHashMap;
     use staticweaver::engine::EngineError;
-    use staticweaver::{Context, Engine, PageOptions};
+    use staticweaver::{Context, Engine};
     use std::fs::File;
     use std::io::Write;
     use std::time::Duration;
@@ -245,44 +245,6 @@ mod tests {
                 let result =
                     engine.render_page(&context, "nonexistent_layout");
                 assert!(matches!(result, Err(Io(_))));
-            }
-        }
-
-        /// Tests for the `PageOptions` struct.
-        mod page_options_tests {
-            use super::*;
-
-            #[test]
-            fn test_page_options_new() {
-                let options = PageOptions::new();
-                assert!(options.elements.is_empty());
-            }
-
-            #[test]
-            fn test_page_options_set_get() {
-                let mut options = PageOptions::new();
-                options
-                    .set("title".to_string(), "My Title".to_string());
-                assert_eq!(
-                    options.get("title"),
-                    Some(&"My Title".to_string())
-                );
-                assert_eq!(options.get("non_existent"), None);
-            }
-
-            #[test]
-            fn test_page_options_large_context() {
-                let mut options = PageOptions::new();
-                for i in 0..1000 {
-                    let key = format!("key{}", i);
-                    let value = format!("value{}", i);
-                    options.set(key, value);
-                }
-                assert_eq!(
-                    options.get("key999"),
-                    Some(&"value999".to_string())
-                );
-                assert_eq!(options.get("key1000"), None);
             }
         }
 
