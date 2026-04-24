@@ -33,6 +33,7 @@ pub enum EngineError {
     /// Network request error. Only available when the `remote-templates`
     /// feature is enabled.
     #[cfg(feature = "remote-templates")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "remote-templates")))]
     #[error("Request error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
@@ -80,6 +81,7 @@ pub enum TemplateError {
     /// Network request error. Only available when the `remote-templates`
     /// feature is enabled.
     #[cfg(feature = "remote-templates")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "remote-templates")))]
     #[error("Request error: {0}")]
     Reqwest(#[from] reqwest::Error),
 

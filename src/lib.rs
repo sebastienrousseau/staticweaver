@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Copyright © 2024-2026 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 #![doc = include_str!("../README.md")]

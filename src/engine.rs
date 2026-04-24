@@ -450,6 +450,7 @@ impl Engine {
     /// temporary directory and returns its path. The temp directory is
     /// owned by the caller via `TempDir` and will be cleaned up on drop.
     #[cfg(feature = "remote-templates")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "remote-templates")))]
     fn download_files_from_url(
         url: &str,
     ) -> Result<PathBuf, EngineError> {
@@ -479,6 +480,7 @@ impl Engine {
     /// timeout, an HTTP status check, and a 1 MiB body cap so a hostile or
     /// misconfigured server cannot exhaust memory.
     #[cfg(feature = "remote-templates")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "remote-templates")))]
     fn download_file(
         url: &str,
         file: &str,
@@ -486,7 +488,7 @@ impl Engine {
     ) -> Result<(), EngineError> {
         /// Per-file body cap. Template assets are HTML/JS/CSS; a megabyte is
         /// far above any realistic payload.
-        const MAX_BYTES: usize = 1 * 1024 * 1024;
+        const MAX_BYTES: usize = 1024 * 1024;
 
         let file_url = format!("{url}/{file}");
         let file_path = dir.join(file);
@@ -501,6 +503,27 @@ impl Engine {
             return Err(EngineError::Render(format!(
                 "Failed to download {file}: HTTP {}",
                 response.status()
+            )));
+        }
+
+        // The downloader targets template assets (HTML/CSS/JS). Reject
+        // anything whose Content-Type does not look textual before we
+        // bother reading the body — stops us silently writing a binary
+        // payload to disk and failing much later inside the parser.
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let looks_textual = content_type.starts_with("text/")
+            || content_type.starts_with("application/javascript")
+            || content_type.starts_with("application/json")
+            || content_type.starts_with("application/xhtml")
+            || content_type.is_empty(); // some servers omit the header
+        if !looks_textual {
+            return Err(EngineError::Render(format!(
+                "{file} has unexpected Content-Type: {content_type}"
             )));
         }
 
