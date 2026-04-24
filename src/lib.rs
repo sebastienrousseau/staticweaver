@@ -1,8 +1,6 @@
-// Copyright © 2024 StaticWeaver. All rights reserved.
+#![forbid(unsafe_code)]
+// Copyright © 2024-2026 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-
-// src/lib.rs
-
 #![doc = include_str!("../README.md")]
 #![doc(
     html_favicon_url = "https://kura.pro/staticweaver/images/favicon.ico",
