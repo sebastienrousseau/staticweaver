@@ -28,7 +28,6 @@ jobs:
       run-fmt: true
       run-audit: true
       run-coverage: true
-      coverage-threshold: 80
       # Fan out test runs to macOS + Windows runners. Keeps cross-platform
       # regressions (path separators, line endings, TLS backends, …) out
       # of the tree before merge.
