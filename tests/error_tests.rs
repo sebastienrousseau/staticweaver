@@ -22,6 +22,7 @@ mod template_error_tests {
 
     /// Test the `Reqwest` variant of the `TemplateError` enum.
     /// This test checks if an HTTP request error is correctly wrapped inside a `TemplateError::Reqwest`.
+    #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest() {
         let reqwest_error =
@@ -69,6 +70,7 @@ mod template_error_tests {
 
     /// Test the `Display` implementation for the `TemplateError::Reqwest` variant.
     /// This test checks if the display output for a Reqwest error is formatted correctly.
+    #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest_display() {
         let reqwest_error =
@@ -97,6 +99,7 @@ mod additional_template_error_tests {
 
     /// Test chaining of Reqwest errors using the `#[from]` attribute.
     /// This ensures that Reqwest errors are correctly converted into `TemplateError::Reqwest`.
+    #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest_chaining() {
         let reqwest_error =
@@ -133,6 +136,7 @@ mod additional_template_error_tests {
 
     /// Test conversion consistency between different types of errors.
     /// This ensures that both I/O and Reqwest errors are correctly handled by `TemplateError`.
+    #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_conversion_consistency() {
         let io_error: io::Error =

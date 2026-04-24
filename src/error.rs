@@ -21,7 +21,9 @@ pub enum EngineError {
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 
-    /// Network request error encountered during engine operations.
+    /// Network request error. Only available when the `remote-templates`
+    /// feature is enabled.
+    #[cfg(feature = "remote-templates")]
     #[error("Request error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
@@ -57,7 +59,9 @@ pub enum TemplateError {
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 
-    /// Network request error encountered during template operations.
+    /// Network request error. Only available when the `remote-templates`
+    /// feature is enabled.
+    #[cfg(feature = "remote-templates")]
     #[error("Request error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
