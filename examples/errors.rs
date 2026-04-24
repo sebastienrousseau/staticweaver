@@ -122,14 +122,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    // ── Boxed conversion: EngineError -> TemplateError ──────────────
+    // ── TemplateError -> EngineError conversion ─────────────────────
     support::task_with_output(
-        "EngineError wrapped in TemplateError",
+        "TemplateError lifts into EngineError via ?",
         || {
-            let engine_err = EngineError::Render("simulated".into());
-            let wrapped =
-                TemplateError::EngineError(Box::new(engine_err));
-            vec![format!("{wrapped}")]
+            let tpl_err =
+                TemplateError::InvalidSyntax("unclosed".into());
+            let engine_err: EngineError = tpl_err.into();
+            vec![format!("{engine_err}")]
         },
     );
 

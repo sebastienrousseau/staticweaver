@@ -93,10 +93,6 @@ pub enum TemplateError {
     #[error("Rendering error: {0}")]
     RenderError(String),
 
-    /// Encountered an engine error during the template processing.
-    #[error("Engine error: {0}")]
-    EngineError(#[from] Box<EngineError>),
-
     /// Error when a required variable is missing from the context.
     #[error("Missing variable: {0}")]
     MissingVariable(String),
@@ -290,17 +286,6 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Rendering error: Missing context variable"
-        );
-    }
-
-    #[test]
-    fn test_template_error_engine_error() {
-        let engine_err =
-            EngineError::Render("Render failure".to_string());
-        let err = TemplateError::EngineError(Box::new(engine_err));
-        assert_eq!(
-            err.to_string(),
-            "Engine error: Render error: Render failure"
         );
     }
 
