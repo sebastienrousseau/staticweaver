@@ -31,16 +31,10 @@ ignore = []
 [bans]
 multiple-versions = "warn"
 highlight = "all"
-# `commons` brings thiserror 1.x while we use 2.x directly; allow the dup
-# until commons bumps. Track: github.com/sebastienrousseau/commons
-skip = [
-    { crate = "thiserror@1", reason = "pulled transitively by commons v0.0.1" },
-    { crate = "thiserror-impl@1", reason = "pulled transitively by commons v0.0.1" },
-]
+skip = []
 skip-tree = []
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "allow"
-# `commons` is a first-party crate hosted on GitHub.
-allow-git = ["https://github.com/sebastienrousseau/commons"]
+allow-git = []

@@ -96,9 +96,6 @@ tempfile = "3.13"
 # thiserror provides the derive macro for error types.
 thiserror = "2.0"
 
-# commons re-exports shared utilities across the sebastienrousseau crates.
-commons = { git = "https://github.com/sebastienrousseau/commons", tag = "v0.0.1", default-features = false, features = ["error"] }
-
 # -----------------------------------------------------------------------------
 # Examples
 # -----------------------------------------------------------------------------
