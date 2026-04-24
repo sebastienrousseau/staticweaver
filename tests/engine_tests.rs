@@ -168,7 +168,13 @@ mod tests {
             use super::*;
             use staticweaver::engine::EngineError::Io;
 
+            // Hits a live URL; only compiled when the remote-templates
+            // feature is on, and ignored by default so a flaky network or
+            // upstream rename does not red-line CI. Run explicitly with:
+            //     cargo test --features remote-templates -- --ignored
+            #[cfg(feature = "remote-templates")]
             #[test]
+            #[ignore = "requires network + github.com reachable"]
             fn test_engine_download_file() {
                 let engine = create_engine();
                 let url = "https://raw.githubusercontent.com/sebastienrousseau/shokunin/main/template";
