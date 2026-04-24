@@ -20,6 +20,20 @@ use std::{fs::File, io::Write, path::PathBuf};
 /// or `staticweaver::engine::EngineError` and pattern-match interchangeably.
 pub use crate::error::EngineError;
 
+/// Filenames fetched by default when `Engine::create_template_folder` is
+/// called with an HTTP/S URL and no explicit file list. Matches the
+/// historical six-file set for backwards compatibility; callers who need
+/// a different layout should use
+/// [`Engine::create_template_folder_with_files`].
+pub const DEFAULT_TEMPLATE_FILES: &[&str] = &[
+    "contact.html",
+    "index.html",
+    "page.html",
+    "post.html",
+    "main.js",
+    "sw.js",
+];
+
 /// The main template rendering engine.
 ///
 /// # Examples
@@ -338,6 +352,34 @@ impl Engine {
         &self,
         template_path: Option<&str>,
     ) -> Result<String, EngineError> {
+        self.create_template_folder_with_files(
+            template_path,
+            DEFAULT_TEMPLATE_FILES,
+        )
+    }
+
+    /// Same as [`create_template_folder`](Self::create_template_folder) but
+    /// accepts a caller-supplied list of filenames to download when
+    /// `template_path` is a URL. Useful when the default
+    /// [`DEFAULT_TEMPLATE_FILES`] set does not match the remote layout.
+    ///
+    /// `files` is ignored for local-directory paths.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    ///
+    /// let engine = Engine::new("templates", Duration::from_secs(60));
+    /// // Pass a custom filename list (e.g. just index.html).
+    /// let _ = engine.create_template_folder_with_files(None, &["index.html"]);
+    /// ```
+    pub fn create_template_folder_with_files(
+        &self,
+        template_path: Option<&str>,
+        files: &[&str],
+    ) -> Result<String, EngineError> {
         let path = template_path.ok_or_else(|| {
             EngineError::InvalidTemplate(
                 "template_path is required; pass a local directory or URL"
@@ -348,7 +390,13 @@ impl Engine {
         if is_url(path) {
             #[cfg(feature = "remote-templates")]
             {
-                let dir = Self::download_files_from_url(path)?;
+                if files.is_empty() {
+                    return Err(EngineError::InvalidTemplate(
+                        "files list must not be empty for URL fetches"
+                            .to_string(),
+                    ));
+                }
+                let dir = Self::download_files_from_url(path, files)?;
                 return dir.to_str().map(str::to_string).ok_or_else(
                     || {
                         EngineError::Io(std::io::Error::new(
@@ -359,12 +407,16 @@ impl Engine {
                 );
             }
             #[cfg(not(feature = "remote-templates"))]
-            return Err(EngineError::InvalidTemplate(
-                "remote template URLs require the `remote-templates` feature"
-                    .to_string(),
-            ));
+            {
+                let _ = files; // Silence unused-arg warning.
+                return Err(EngineError::InvalidTemplate(
+                    "remote template URLs require the `remote-templates` feature"
+                        .to_string(),
+                ));
+            }
         }
 
+        let _ = files;
         let current_dir = std::env::current_dir()?;
         let local_path = current_dir.join(path);
         if local_path.exists() && local_path.is_dir() {
@@ -382,13 +434,14 @@ impl Engine {
         }
     }
 
-    /// Downloads the default set of template files from `url` into a fresh
+    /// Downloads each filename in `files` from `url` into a fresh
     /// temporary directory and returns its path. The temp directory is
     /// owned by the caller via `TempDir` and will be cleaned up on drop.
     #[cfg(feature = "remote-templates")]
     #[cfg_attr(docsrs, doc(cfg(feature = "remote-templates")))]
     fn download_files_from_url(
         url: &str,
+        files: &[&str],
     ) -> Result<PathBuf, EngineError> {
         let dir = tempfile::tempdir()?;
         // `keep` (stable replacement for the deprecated `into_path`) returns
@@ -396,16 +449,7 @@ impl Engine {
         // caller treats the downloaded template dir as long-lived.
         let template_dir_path = dir.keep();
 
-        let files = [
-            "contact.html",
-            "index.html",
-            "page.html",
-            "post.html",
-            "main.js",
-            "sw.js",
-        ];
-
-        for file in &files {
+        for file in files {
             Self::download_file(url, file, &template_dir_path)?;
         }
 
