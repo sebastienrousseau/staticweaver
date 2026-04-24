@@ -17,7 +17,6 @@ homepage = "https://staticweaver.com/"             # Project's homepage URL
 documentation = "https://staticweaver.com/documentation/index.html" # Doc URL
 repository = "https://github.com/sebastienrousseau/staticweaver"    # Repository URL
 readme = "README.md"                        # Path to the readme file
-build = "build.rs"                          # Path to the build script
 
 # -----------------------------------------------------------------------------
 # Crate Configuration
@@ -61,13 +60,6 @@ default = []                                # No default features enabled
 remote-templates = ["dep:reqwest"]          # Fetch templates over HTTP/S via create_template_folder
 
 # -----------------------------------------------------------------------------
-# Build Dependencies
-# -----------------------------------------------------------------------------
-[build-dependencies]
-# Dependencies for the build script, used for pre-compilation tasks.
-version_check = "0.9"                       # Ensures that a compatible Rust version is used
-
-# -----------------------------------------------------------------------------
 # Development Dependencies
 # -----------------------------------------------------------------------------
 [dev-dependencies]
@@ -82,26 +74,19 @@ criterion = "0.5"                           # Benchmarking library to test perfo
 
 fnv = "1.0"                                 # Fast non-cryptographic hash function
 
-# regex is used for regular expression support in the template engine.
-regex = "1.11"
-
 # reqwest powers the optional remote-template fetcher. Gated behind the
 # `remote-templates` feature so the core crate has no networking code in
 # its default build. rustls + native-roots avoids pulling OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"], optional = true }
 
-# serde is used for serializing and deserializing data structures, including JSON.
-# The `derive` feature simplifies the process of creating serializable and deserializable structs.
-serde = { version = "1.0", features = ["derive"] }
-
-# serde_json is used for working with JSON data, which might be a common format for template context data.
-serde_json = "1.0"
-
-# tempfile is used to create temporary files and directories, which may be needed for template generation.
+# tempfile is used to create temporary directories for the remote-template
+# fetcher. Still needed at runtime for the feature-gated download path.
 tempfile = "3.13"
 
-# thiserror is used for handling errors in a simple and clear way, especially for custom error types.
+# thiserror provides the derive macro for error types.
 thiserror = "2.0"
+
+# commons re-exports shared utilities across the sebastienrousseau crates.
 commons = { git = "https://github.com/sebastienrousseau/commons", tag = "v0.0.1", default-features = false, features = ["error"] }
 
 # -----------------------------------------------------------------------------
