@@ -18,11 +18,27 @@ lint: ensure-clippy ## Lint the project with Clippy.
 		--deny clippy::dbg_macro --deny clippy::unimplemented --deny clippy::todo --deny warnings \
 		--deny missing_docs --deny broken_intra_doc_links --forbid unused_must_use --deny clippy::result_unit_err
 
-# Run all unit and integration tests in the project.
+# Full test battery — library, integration, doctests, all feature
+# combinations, both escape paths, and the remote-templates mock-server
+# tests. Matches what the `pre-push` hook runs.
 .PHONY: test
 test: ## Run tests for the project.
-	@echo "Running tests..."
-	@cargo test
+	@echo "Running tests (default features)..."
+	@cargo test --all-targets
+	@echo "Running tests (--features remote-templates)..."
+	@cargo test --all-targets --features remote-templates
+	@echo "Running doctests (--all-features)..."
+	@cargo test --doc --all-features
+
+# Line-coverage report via cargo-llvm-cov. Installs the binary if
+# missing; fails the build if overall line coverage drops below 95%.
+.PHONY: coverage
+coverage: ## Measure + enforce >= 95% line coverage.
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || cargo install --locked cargo-llvm-cov
+	@cargo llvm-cov --all-features --summary-only | tee /tmp/staticweaver-cov.txt
+	@cov=$$(awk '/^TOTAL/ {for (i=1;i<=NF;i++) if ($$i ~ /%$$/) last=$$i} END {gsub("%","",last); print last}' /tmp/staticweaver-cov.txt); \
+		awk -v c="$$cov" 'BEGIN {exit !(c+0 >= 95.0)}' \
+			|| { echo "line coverage $$cov% below 95% floor"; exit 1; }
 
 # Check the project for errors without producing outputs.
 .PHONY: check

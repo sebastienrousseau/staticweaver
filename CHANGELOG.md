@@ -18,15 +18,54 @@ called out explicitly below).
   feature-gated item so docs.rs renders the "available on crate feature
   remote-templates only" badge.
 - `CHANGELOG.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`.
+- **Cross-platform CI** — `run-cross-platform: true` in `ci.yml` fans every
+  PR to macOS + Windows runners. Multi-OS `verify` job in `release.yml`.
+- **Portable git hooks** — repo-local `.githooks/{pre-commit,commit-msg,pre-push}`
+  (POSIX `sh`). Installed by `make init`; enforces `commit.gpgsign=true`,
+  Conventional-Commits subjects, and runs the full test battery before
+  `git push`.
+- **`rust-toolchain.toml`** pinned to `stable` with `rustfmt`+`clippy`.
+- **Mock-server integration tests** — 6 new tests in `tests/download_tests.rs`
+  covering the remote-templates HTTP path (happy path, 404, bad
+  `Content-Type`, oversized `Content-Length`, JavaScript MIME acceptance,
+  missing Content-Type tolerance). Uses `mockito` as a dev-dep.
+- **New unit tests** for `Cache::IntoIterator` (live + expired), every
+  `create_template_folder` branch (None, missing path, existing path, URL
+  without feature), the `render_page` cache-hit path, the `"` escape
+  branch, and `set_max_cache_size`'s no-op path.
+- **Coverage gate** — `coverage-gate` CI job fails the build if line
+  coverage drops below 95%. `make coverage` produces the same report
+  locally.
+- **`examples/remote.rs`** — feature-gated example demonstrating
+  `create_template_folder(Some(url))` against a local `mockito` server.
 
 ### Fixed
 
 - `clippy::identity_op` on the 1 MiB download cap under
   `--features remote-templates`.
+- `Makefile`: remove the broken `rustup component add rustfix` step — it
+  never existed as a rustup component. `cargo fix` ships with the
+  toolchain.
+- `tests/error_tests.rs`: replace `http://localhost:1` with
+  `http://nonexistent.invalid./` (RFC 2606 reserved TLD) to prevent
+  accidental mask-hits on developer machines.
+
+### Changed
+
+- `.github/workflows/release.yml`: delegated to
+  `sebastienrousseau/pipelines/release.yml@99a39f7`, fires on `v*.*.*`
+  tags only, includes a `verify` matrix on macOS / Linux / Windows.
+- `Makefile` `test` target now runs default features, `remote-templates`
+  features, and `--doc --all-features` in sequence — matches the
+  `pre-push` hook.
+- `deny.toml`: allowlist kept broad (BSD, ISC, CC0-1.0, Unicode-3.0) to
+  cover feature-gated deps; documented in-line.
 
 ### Removed
 
 - Orphaned `.deepsource.toml` (no DeepSource integration was wired up).
+- Duplicate `.github/CODE-OF-CONDUCT.md` + `.github/SECURITY.md` (root
+  versions are canonical).
 
 ## [0.0.2] - 2026-04-24
 

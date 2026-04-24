@@ -13,6 +13,7 @@ chmod +x .githooks/*
 | :--- | :--- |
 | `pre-commit` | Enforces `commit.gpgsign=true`, blocks secret-shaped filenames, runs `cargo fmt --all -- --check` if cargo is on PATH. |
 | `commit-msg` | Validates Conventional Commits subject (`feat:`, `fix:`, `chore:`, …). |
+| `pre-push` | Runs the full local battery (`cargo fmt --check`, `cargo clippy -D warnings --all-features`, `cargo test --all-features`, `cargo test --doc --all-features`) before the push lands on the remote. Success is cached for 5 minutes so rapid pushes don't re-run the whole suite. |
 
 Both are POSIX `sh` — they run identically on macOS, Linux, WSL2, and
 Git for Windows' bundled Git Bash.

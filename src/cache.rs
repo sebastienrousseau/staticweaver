@@ -714,4 +714,35 @@ mod tests {
             Cache::with_capacity(Duration::from_secs(60), 100);
         assert!(cache.items.capacity() >= 100);
     }
+
+    #[test]
+    fn into_iter_yields_live_entries_and_skips_expired() {
+        let mut cache: Cache<String, String> =
+            Cache::new(Duration::from_secs(60));
+        let _ = cache.insert("a".to_string(), "1".to_string());
+        let _ = cache.insert("b".to_string(), "2".to_string());
+
+        let mut items: Vec<_> = cache.into_iter().collect();
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            items,
+            vec![
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), "2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn into_iter_drops_expired_entries() {
+        let mut cache: Cache<String, i32> =
+            Cache::new(Duration::from_millis(30));
+        let _ = cache.insert("k".to_string(), 1);
+        sleep(Duration::from_millis(60));
+        let items: Vec<_> = cache.into_iter().collect();
+        assert!(
+            items.is_empty(),
+            "expired entries must not be yielded via IntoIterator"
+        );
+    }
 }

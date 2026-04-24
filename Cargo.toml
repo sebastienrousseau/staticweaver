@@ -70,6 +70,11 @@ remote-templates = ["dep:reqwest"]          # Fetch templates over HTTP/S via cr
 [dev-dependencies]
 # Dependencies required for testing and development.
 criterion = "0.5"                           # Benchmarking library to test performance
+# mockito powers the remote-templates integration tests: it boots a real
+# HTTP server on a random localhost port so `reqwest::blocking` exercises
+# the actual wire path (status codes, Content-Type, body limits) without
+# depending on a live network.
+mockito = "1"
 
 # -----------------------------------------------------------------------------
 # Dependencies
@@ -120,6 +125,12 @@ path = "examples/engine.rs"
 [[example]]
 name = "errors"
 path = "examples/errors.rs"
+
+[[example]]
+# Gated behind `remote-templates`; without the feature the example
+# prints a hint telling the user how to enable it.
+name = "remote"
+path = "examples/remote.rs"
 
 # -----------------------------------------------------------------------------
 # Criterion Benchmark

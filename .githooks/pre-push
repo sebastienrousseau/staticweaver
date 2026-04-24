@@ -1,0 +1,44 @@
+#!/bin/sh
+# Repo-local pre-push hook. Installed by `make init` via:
+#   git config core.hooksPath .githooks
+#
+# Runs the local test battery before the push lands on the remote.
+# Caches a success stamp for 5 minutes so rapid-fire pushes don't
+# re-run the whole suite.
+#
+# POSIX sh only — runs identically on macOS, Linux, and WSL2, plus
+# git-for-windows' bundled Git Bash.
+set -eu
+
+root="$(git rev-parse --show-toplevel)"
+stamp="${root}/.git/.test-passed-at"
+
+now="$(date +%s)"
+if [ -f "$stamp" ]; then
+    last="$(cat "$stamp" 2>/dev/null || echo 0)"
+    age="$(( now - last ))"
+    if [ "$age" -lt 300 ]; then
+        # Tests already green within the last 5 minutes — skip.
+        exit 0
+    fi
+fi
+
+red()  { printf '\033[31m%s\033[0m' "$1"; }
+
+# Each step exits the hook on failure; the stamp is written only on
+# full-suite success.
+(
+    cd "$root"
+    cargo fmt --all -- --check
+    cargo clippy --all-targets --no-deps --all-features -- -D warnings
+    cargo test --all-features
+    cargo test --doc --all-features
+) || {
+    printf '%s local test battery failed — push aborted.\n' "$(red 'error:')" >&2
+    printf '  override with %s (uses the --no-verify escape hatch).\n' \
+        'git push --no-verify' >&2
+    exit 1
+}
+
+printf '%s\n' "$now" > "$stamp"
+exit 0

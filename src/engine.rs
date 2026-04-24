@@ -835,4 +835,119 @@ mod tests {
         engine.set_max_cache_size(1);
         assert!(engine.render_cache.is_empty());
     }
+
+    #[test]
+    fn set_max_cache_size_noop_when_under_limit() {
+        let mut engine =
+            Engine::new("templates", Duration::from_secs(3600));
+        let _ = engine
+            .render_cache
+            .insert("k".to_string(), "v".to_string());
+        engine.set_max_cache_size(8);
+        assert_eq!(
+            engine.render_cache.len(),
+            1,
+            "no-op branch must preserve cache when len() <= max_size"
+        );
+    }
+
+    #[test]
+    fn render_page_serves_from_cache_on_repeat_call() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let tpl = temp.path().join("page.html");
+        fs::write(&tpl, "hi {{name}}").unwrap();
+
+        let mut engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "alice".to_string());
+
+        let first = engine.render_page(&ctx, "page").unwrap();
+        assert_eq!(engine.render_cache.len(), 1);
+
+        // Overwrite the template file; a cached render returns the old
+        // output, proving the second call is served from cache rather
+        // than re-reading disk.
+        fs::write(&tpl, "changed {{name}}").unwrap();
+        let second = engine.render_page(&ctx, "page").unwrap();
+        assert_eq!(second, first, "second call must hit the cache");
+    }
+
+    #[test]
+    fn escape_html_covers_every_metacharacter() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "& < > \" '".to_string());
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "&amp; &lt; &gt; &quot; &#x27;");
+    }
+
+    #[test]
+    fn create_template_folder_rejects_none() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        match engine.create_template_folder(None) {
+            Err(EngineError::InvalidTemplate(msg)) => {
+                assert!(
+                    msg.contains("template_path is required"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected InvalidTemplate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_template_folder_returns_existing_local_path() {
+        use tempfile::TempDir;
+        let temp = TempDir::new().unwrap();
+        // `create_template_folder` joins against the *current working
+        // directory*, so pass a relative segment reachable from the temp
+        // dir by chdir'ing.
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+        fs::create_dir_all("templates").unwrap();
+
+        let engine = Engine::new(".", Duration::from_secs(60));
+        let got = engine.create_template_folder(Some("templates"));
+
+        // Restore CWD before asserting so a failure does not poison
+        // subsequent tests in the same process.
+        std::env::set_current_dir(&prev).unwrap();
+        let path = got.expect("existing local dir must resolve");
+        assert!(path.ends_with("templates"), "{path}");
+    }
+
+    #[test]
+    fn create_template_folder_missing_local_path_is_io_not_found() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        match engine.create_template_folder(Some(
+            "this-directory-does-not-exist-on-any-machine",
+        )) {
+            Err(EngineError::Io(e)) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+            }
+            other => panic!("expected Io(NotFound), got {other:?}"),
+        }
+    }
+
+    #[cfg(not(feature = "remote-templates"))]
+    #[test]
+    fn create_template_folder_url_without_feature_errors() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        match engine
+            .create_template_folder(Some("https://example.com/t/"))
+        {
+            Err(EngineError::InvalidTemplate(msg)) => {
+                assert!(msg.contains("remote-templates"), "{msg}");
+            }
+            other => {
+                panic!("expected InvalidTemplate, got {other:?}")
+            }
+        }
+    }
 }
