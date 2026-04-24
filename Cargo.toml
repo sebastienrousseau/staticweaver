@@ -42,6 +42,11 @@ exclude = [
     "/.vscode/*"                            # Ignore VSCode settings
 ]
 
+# Disable cargo's autodiscovery so `examples/support.rs` (a shared helper
+# module, not a binary) is not compiled as an example on its own. The
+# real examples are listed explicitly in the `[[example]]` tables below.
+autoexamples = false
+
 # -----------------------------------------------------------------------------
 # Library Information
 # -----------------------------------------------------------------------------
@@ -92,32 +97,29 @@ commons = { git = "https://github.com/sebastienrousseau/commons", tag = "v0.0.1"
 # -----------------------------------------------------------------------------
 # Examples
 # -----------------------------------------------------------------------------
+# Each example uses `#[path = "support.rs"] mod support;` to pull in a
+# shared spinner/checkmark helper. The pattern, naming (one-word file
+# name) and structure match the style used across sebastienrousseau/*
+# crates (e.g. `noyalib/examples`).
 [[example]]
-# Example code demonstrating the cache functionality.
-name = "cache_example"                  # Name of the example
-path = "examples/cache_example.rs"      # Path to the example code
+name = "hello"
+path = "examples/hello.rs"
 
 [[example]]
-# Example code demonstrating the context functionality.
-name = "context_example"                # Name of the example
-path = "examples/context_example.rs"    # Path to the example code
+name = "context"
+path = "examples/context.rs"
 
 [[example]]
-# Example code demonstrating the engine functionality.
-name = "engine_example"                 # Name of the example
-path = "examples/engine_example.rs"     # Path to the example code
+name = "cache"
+path = "examples/cache.rs"
 
 [[example]]
-# Example code demonstrating the error handling functionality.
-name = "error_example"                  # Name of the example
-path = "examples/error_example.rs"      # Path to the example code
+name = "engine"
+path = "examples/engine.rs"
 
 [[example]]
-# Example code demonstrating the library functionality.
-name = "lib_example"                    # Name of the example
-path = "examples/lib_example.rs"        # Path to the example code
-
-# (Removed redundant `example` binary that only re-imported the others.)
+name = "errors"
+path = "examples/errors.rs"
 
 # -----------------------------------------------------------------------------
 # Criterion Benchmark
