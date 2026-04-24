@@ -27,6 +27,16 @@ pub use crate::error::EngineError;
 /// This struct contains the options for rendering a page template.
 /// These options are used to construct a context `FnvHashMap` that is
 /// passed to the `render_template` function.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::engine::PageOptions;
+///
+/// let mut options = PageOptions::new();
+/// options.set("title".to_string(), "Home".to_string());
+/// assert_eq!(options.get("title"), Some(&"Home".to_string()));
+/// ```
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct PageOptions {
     /// Elements of the page
@@ -97,6 +107,19 @@ impl PageOptions {
 }
 
 /// The main template rendering engine.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::{Context, Engine};
+/// use std::time::Duration;
+///
+/// let engine = Engine::new("templates", Duration::from_secs(60));
+/// let mut ctx = Context::new();
+/// ctx.set("who".to_string(), "world".to_string());
+/// let out = engine.render_template("hello {{who}}", &ctx).unwrap();
+/// assert_eq!(out, "hello world");
+/// ```
 #[derive(Debug)]
 pub struct Engine {
     /// Path to the template directory.
@@ -144,6 +167,20 @@ impl Engine {
     /// builder-style chaining. Escaping is on by default; disable it only
     /// when the engine is used to render non-HTML output or when the caller
     /// escapes values themselves.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::{Context, Engine};
+    /// use std::time::Duration;
+    ///
+    /// let engine = Engine::new("", Duration::from_secs(60))
+    ///     .with_html_escape(false);
+    /// let mut ctx = Context::new();
+    /// ctx.set("body".to_string(), "<b>hi</b>".to_string());
+    /// let out = engine.render_template("{{body}}", &ctx).unwrap();
+    /// assert_eq!(out, "<b>hi</b>");
+    /// ```
     #[must_use]
     pub fn with_html_escape(mut self, enable: bool) -> Self {
         self.escape_html = enable;
@@ -350,6 +387,17 @@ impl Engine {
     ///   was supplied without the `remote-templates` feature.
     /// - `EngineError::Reqwest` / `EngineError::Render`: when
     ///   `remote-templates` is enabled and the fetch fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    ///
+    /// let engine = Engine::new("templates", Duration::from_secs(60));
+    /// // `None` is rejected — callers must pass a path or URL explicitly.
+    /// assert!(engine.create_template_folder(None).is_err());
+    /// ```
     pub fn create_template_folder(
         &self,
         template_path: Option<&str>,

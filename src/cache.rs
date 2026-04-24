@@ -16,6 +16,17 @@ struct CachedItem<T> {
 ///
 /// This cache provides time-based expiration for items and an optional maximum capacity.
 /// It's designed to be generic over both key and value types for maximum flexibility.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::cache::Cache;
+/// use std::time::Duration;
+///
+/// let mut cache: Cache<String, u32> = Cache::new(Duration::from_secs(60));
+/// let _ = cache.insert("visits".to_string(), 1);
+/// assert_eq!(cache.get(&"visits".to_string()), Some(&1));
+/// ```
 #[derive(Debug, Clone)]
 pub struct Cache<K, V> {
     items: HashMap<K, CachedItem<V>>,
@@ -54,9 +65,24 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
 
     /// Returns an iterator over the key-value pairs in the cache.
     ///
+    /// Only entries that have not yet expired are yielded.
+    ///
     /// # Returns
     ///
     /// An iterator over the key-value pairs in the cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, String> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// let _ = cache.insert("a".to_string(), "1".to_string());
+    /// let _ = cache.insert("b".to_string(), "2".to_string());
+    /// assert_eq!(cache.iter().count(), 2);
+    /// ```
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         let now = Instant::now();
         self.items.iter().filter_map(move |(k, item)| {
@@ -168,6 +194,19 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// This method should be called periodically to clean up the cache.
     ///
     /// Time complexity: O(n) where n is the number of items in the cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, String> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// let _ = cache.insert("k".to_string(), "v".to_string());
+    /// cache.remove_expired();
+    /// assert_eq!(cache.len(), 1);
+    /// ```
     pub fn remove_expired(&mut self) {
         let now = Instant::now();
         self.items.retain(|_, item| item.expiration > now);
@@ -182,6 +221,19 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// # Returns
     ///
     /// `true` if the key exists and hasn't expired, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, i32> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// let _ = cache.insert("n".to_string(), 1);
+    /// assert!(cache.contains_key(&"n".to_string()));
+    /// assert!(!cache.contains_key(&"missing".to_string()));
+    /// ```
     pub fn contains_key(&self, key: &K) -> bool {
         self.items
             .get(key)
@@ -197,6 +249,19 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// # Returns
     ///
     /// An `Option` containing the remaining TTL if the item exists and hasn't expired, or `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, i32> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// let _ = cache.insert("n".to_string(), 1);
+    /// assert!(cache.ttl(&"n".to_string()).is_some());
+    /// assert!(cache.ttl(&"missing".to_string()).is_none());
+    /// ```
     pub fn ttl(&self, key: &K) -> Option<Duration> {
         self.items.get(key).and_then(|item| {
             let now = Instant::now();
@@ -217,6 +282,19 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// # Returns
     ///
     /// `true` if the item was found and refreshed, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, i32> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// let _ = cache.insert("n".to_string(), 1);
+    /// assert!(cache.refresh(&"n".to_string()));
+    /// assert!(!cache.refresh(&"missing".to_string()));
+    /// ```
     pub fn refresh(&mut self, key: &K) -> bool {
         if let Some(item) = self.items.get_mut(key) {
             item.expiration = Instant::now() + self.ttl;
@@ -235,6 +313,19 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// # Returns
     ///
     /// The removed value if the key was present, or `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, String> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// let _ = cache.insert("k".to_string(), "v".to_string());
+    /// assert_eq!(cache.remove(&"k".to_string()), Some("v".to_string()));
+    /// assert_eq!(cache.remove(&"k".to_string()), None);
+    /// ```
     pub fn remove(&mut self, key: &K) -> Option<V> {
         self.items.remove(key).map(|item| item.value)
     }
@@ -249,6 +340,19 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// # Returns
     ///
     /// `true` if the key was found and updated, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, String> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// let _ = cache.insert("k".to_string(), "old".to_string());
+    /// assert!(cache.update(&"k".to_string(), "new".to_string()));
+    /// assert_eq!(cache.get(&"k".to_string()), Some(&"new".to_string()));
+    /// ```
     pub fn update(&mut self, key: &K, value: V) -> bool {
         if let Some(item) = self.items.get_mut(key) {
             item.value = value;
@@ -266,11 +370,35 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// # Arguments
     ///
     /// * `capacity` - The maximum number of items the cache can hold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, String> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// cache.set_capacity(128);
+    /// ```
     pub fn set_capacity(&mut self, capacity: usize) {
         self.capacity = Some(capacity);
     }
 
     /// Clears all items from the cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, i32> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// let _ = cache.insert("n".to_string(), 1);
+    /// cache.clear();
+    /// assert!(cache.is_empty());
+    /// ```
     pub fn clear(&mut self) {
         self.items.clear();
     }
@@ -280,6 +408,19 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// # Returns
     ///
     /// The number of key-value pairs currently in the cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, i32> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// assert_eq!(cache.len(), 0);
+    /// let _ = cache.insert("a".to_string(), 1);
+    /// assert_eq!(cache.len(), 1);
+    /// ```
     #[must_use]
     pub fn len(&self) -> usize {
         self.items.len()
@@ -290,6 +431,17 @@ impl<K: Hash + Eq, V: Clone> Cache<K, V> {
     /// # Returns
     ///
     /// `true` if the cache is empty, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let cache: Cache<String, String> =
+    ///     Cache::new(Duration::from_secs(60));
+    /// assert!(cache.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()

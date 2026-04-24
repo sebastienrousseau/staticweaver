@@ -14,6 +14,15 @@ use thiserror::Error;
 /// This error type consolidates multiple underlying error types, including I/O errors,
 /// network request errors, and rendering-specific issues. It provides a unified interface for
 /// handling errors in the engine context.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::EngineError;
+///
+/// let err = EngineError::Render("missing key".to_string());
+/// assert_eq!(err.to_string(), "Render error: missing key");
+/// ```
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum EngineError {
@@ -52,6 +61,15 @@ pub enum EngineError {
 ///
 /// This error type focuses on issues related to the manipulation of templates,
 /// such as syntax errors, rendering failures, or invalid input data.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::TemplateError;
+///
+/// let err = TemplateError::MissingVariable("name".to_string());
+/// assert_eq!(err.to_string(), "Missing variable: name");
+/// ```
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum TemplateError {
@@ -90,6 +108,24 @@ pub enum TemplateError {
 ///
 /// This type is used throughout the StaticWeaver library for any operation that
 /// can produce an `EngineError`.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::error::Result;
+/// use staticweaver::EngineError;
+///
+/// fn check(input: &str) -> Result<usize> {
+///     if input.is_empty() {
+///         Err(EngineError::InvalidTemplate("empty".to_string()))
+///     } else {
+///         Ok(input.len())
+///     }
+/// }
+///
+/// assert_eq!(check("hello").unwrap(), 5);
+/// assert!(check("").is_err());
+/// ```
 pub type Result<T> = std::result::Result<T, EngineError>;
 
 #[cfg(test)]
