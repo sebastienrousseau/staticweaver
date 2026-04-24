@@ -285,16 +285,19 @@ mod tests {
             use super::*;
 
             #[test]
-            fn test_render_template_invalid_format() {
+            fn test_render_template_bare_braces_are_literal() {
+                // Single-brace delimiters without a matching `{{` are now
+                // treated as literal text; the previous rejection was a
+                // false-positive heuristic.
                 let engine = create_engine();
                 let context = create_basic_context();
                 let template = "{greeting}, {name}!";
                 assert_template_rendering(
-                &engine,
-                template,
-                &context,
-                Err(EngineError::InvalidTemplate("Invalid template format: single curly braces detected".to_string())),
-            );
+                    &engine,
+                    template,
+                    &context,
+                    Ok("{greeting}, {name}!"),
+                );
             }
 
             #[test]

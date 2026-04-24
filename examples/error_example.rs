@@ -51,7 +51,9 @@ fn io_error_example() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Demonstrates handling network request errors.
+/// Demonstrates handling network request errors. Only compiled when the
+/// `remote-templates` feature is enabled.
+#[cfg(feature = "remote-templates")]
 fn reqwest_error_example() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🦀 Reqwest Error Example");
     println!("---------------------------------------------");
@@ -69,6 +71,16 @@ fn reqwest_error_example() -> Result<(), Box<dyn std::error::Error>> {
         },
     }
 
+    Ok(())
+}
+
+/// Stub used when the `remote-templates` feature is disabled — keeps the
+/// example binary building with a flat feature matrix.
+#[cfg(not(feature = "remote-templates"))]
+fn reqwest_error_example() -> Result<(), Box<dyn std::error::Error>> {
+    println!(
+        "\n🦀 Reqwest example skipped (build with --features remote-templates)"
+    );
     Ok(())
 }
 
@@ -146,7 +158,10 @@ fn template_rendering_example() -> Result<(), Box<dyn std::error::Error>>
             EngineError::InvalidTemplate(msg) => {
                 println!("    ❌ Invalid Template Error: {}", msg)
             }
-            _ => println!("    ❌ Unexpected error type: {:?}", e),
+            #[cfg(feature = "remote-templates")]
+            EngineError::Reqwest(err) => {
+                println!("    ❌ Reqwest Error: {}", err)
+            }
         },
     }
 

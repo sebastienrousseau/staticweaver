@@ -10,13 +10,13 @@
 use crate::cache::Cache;
 use crate::context::Context;
 use fnv::FnvHashMap;
-use reqwest;
-use std::fs::{self, File};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 use std::time::Duration;
-use tempfile::tempdir;
 use thiserror::Error;
+
+#[cfg(feature = "remote-templates")]
+use std::{fs::File, io::Write, path::PathBuf};
 
 /// Error types specific to the engine operations.
 #[derive(Debug, Error)]
@@ -25,7 +25,9 @@ pub enum EngineError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Network request related errors.
+    /// Network request related errors. Only emitted when the
+    /// `remote-templates` feature is enabled.
+    #[cfg(feature = "remote-templates")]
     #[error("Request error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
@@ -352,90 +354,82 @@ impl Engine {
         self.close_delim = close.to_string();
     }
 
-    /// Creates or uses an existing template folder.
+    /// Resolves a template folder, either from a local directory or — when
+    /// the `remote-templates` feature is enabled — from an HTTP/S URL.
     ///
     /// # Arguments
     ///
-    /// * `template_path` - An optional path to the template folder. It can be a local path or a URL.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the template folder path as a `String` on success, or an `EngineError` on failure.
+    /// * `template_path` - An optional path or URL. `None` is an error; pass
+    ///   an explicit directory or URL. (Earlier versions silently fetched
+    ///   from a hardcoded third-party URL — that default is gone.)
     ///
     /// # Errors
     ///
-    /// This function can return the following errors:
-    /// - `EngineError::Io`: If there is an issue with file operations.
-    /// - `EngineError::Reqwest`: If there is an issue downloading files from a URL.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use staticweaver::engine::Engine;
-    /// use std::time::Duration;
-    ///
-    /// let engine = Engine::new("templates", Duration::from_secs(3600));
-    /// let result = engine.create_template_folder(Some("custom_templates"));
-    /// ```
+    /// - `EngineError::Io`: the directory does not exist.
+    /// - `EngineError::InvalidTemplate`: `template_path` is `None`, or a URL
+    ///   was supplied without the `remote-templates` feature.
+    /// - `EngineError::Reqwest` / `EngineError::Render`: when
+    ///   `remote-templates` is enabled and the fetch fails.
     pub fn create_template_folder(
         &self,
         template_path: Option<&str>,
     ) -> Result<String, EngineError> {
+        let path = template_path.ok_or_else(|| {
+            EngineError::InvalidTemplate(
+                "template_path is required; pass a local directory or URL"
+                    .to_string(),
+            )
+        })?;
+
+        if is_url(path) {
+            #[cfg(feature = "remote-templates")]
+            {
+                let dir = Self::download_files_from_url(path)?;
+                return dir.to_str().map(str::to_string).ok_or_else(
+                    || {
+                        EngineError::Io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Invalid UTF-8 sequence in template path",
+                        ))
+                    },
+                );
+            }
+            #[cfg(not(feature = "remote-templates"))]
+            return Err(EngineError::InvalidTemplate(
+                "remote template URLs require the `remote-templates` feature"
+                    .to_string(),
+            ));
+        }
+
         let current_dir = std::env::current_dir()?;
-
-        let template_dir_path = match template_path {
-            Some(path) if is_url(path) => {
-                // Download template files from the URL
-                Self::download_files_from_url(path)?
-            }
-            Some(path) => {
-                // Use the local directory if it exists
-                let local_path = current_dir.join(path);
-                if local_path.exists() && local_path.is_dir() {
-                    local_path
-                } else {
-                    // Return an I/O error if the directory is not found
-                    return Err(EngineError::Io(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!(
-                            "Template directory not found: {}",
-                            path
-                        ),
-                    )));
-                }
-            }
-            None => {
-                // Default to downloading template files from the default URL
-                let default_url = "https://raw.githubusercontent.com/sebastienrousseau/shokunin/main/template/";
-                Self::download_files_from_url(default_url)?
-            }
-        };
-
-        // Ensure the template path is valid UTF-8
-        Ok(template_dir_path
-            .to_str()
-            .ok_or_else(|| {
+        let local_path = current_dir.join(path);
+        if local_path.exists() && local_path.is_dir() {
+            local_path.to_str().map(str::to_string).ok_or_else(|| {
                 EngineError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "Invalid UTF-8 sequence in template path",
                 ))
-            })?
-            .to_string())
+            })
+        } else {
+            Err(EngineError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Template directory not found: {path}"),
+            )))
+        }
     }
 
-    /// Helper function to download files from a URL and save to a directory.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - The URL to download files from.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the path to the directory or an `EngineError`.
+    /// Downloads the default set of template files from `url` into a fresh
+    /// temporary directory and returns its path. The temp directory is
+    /// owned by the caller via `TempDir` and will be cleaned up on drop.
+    #[cfg(feature = "remote-templates")]
     fn download_files_from_url(
         url: &str,
     ) -> Result<PathBuf, EngineError> {
-        let template_dir_path = tempdir()?.into_path();
+        let dir = tempfile::tempdir()?;
+        // `keep` (stable replacement for the deprecated `into_path`) returns
+        // a PathBuf and suppresses cleanup; we accept that here because the
+        // caller treats the downloaded template dir as long-lived.
+        let template_dir_path = dir.keep();
 
         let files = [
             "contact.html",
@@ -453,45 +447,53 @@ impl Engine {
         Ok(template_dir_path)
     }
 
-    /// Downloads a single file from a URL to the given directory.
-    ///
-    /// # Arguments
-    ///
-    /// * `url` - The base URL.
-    /// * `file` - The file to download.
-    /// * `dir` - The directory to save the file.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` indicating success or an `EngineError`.
+    /// Downloads a single file from `url/file` into `dir`, with a 10s
+    /// timeout, an HTTP status check, and a 1 MiB body cap so a hostile or
+    /// misconfigured server cannot exhaust memory.
+    #[cfg(feature = "remote-templates")]
     fn download_file(
         url: &str,
         file: &str,
         dir: &Path,
     ) -> Result<(), EngineError> {
-        let file_url = format!("{}/{}", url, file);
+        /// Per-file body cap. Template assets are HTML/JS/CSS; a megabyte is
+        /// far above any realistic payload.
+        const MAX_BYTES: usize = 1 * 1024 * 1024;
+
+        let file_url = format!("{url}/{file}");
         let file_path = dir.join(file);
 
         let client = reqwest::blocking::Client::new();
         let response = client
             .get(&file_url)
-            .timeout(Duration::from_secs(10)) // Set a timeout
+            .timeout(Duration::from_secs(10))
             .send()?;
 
-        // Check if the response status is not a success (200-299)
         if !response.status().is_success() {
             return Err(EngineError::Render(format!(
-                "Failed to download {}: HTTP {}",
-                file,
+                "Failed to download {file}: HTTP {}",
                 response.status()
             )));
         }
 
-        // Proceed with file saving if the response is successful
-        let mut file = File::create(&file_path)?;
-        let content = response.text()?;
-        file.write_all(content.as_bytes())?;
+        if let Some(len) = response.content_length() {
+            if len as usize > MAX_BYTES {
+                return Err(EngineError::Render(format!(
+                    "{file} too large: Content-Length {len} exceeds {MAX_BYTES}"
+                )));
+            }
+        }
 
+        let bytes = response.bytes()?;
+        if bytes.len() > MAX_BYTES {
+            return Err(EngineError::Render(format!(
+                "{file} too large after read: {} bytes exceeds {MAX_BYTES}",
+                bytes.len()
+            )));
+        }
+
+        let mut out = File::create(&file_path)?;
+        out.write_all(&bytes)?;
         Ok(())
     }
 

@@ -58,7 +58,7 @@ path = "src/lib.rs"                     # Path to the library entry point
 [features]
 # Optional features that can be enabled or disabled.
 default = []                                # No default features enabled
-async = []                                  # Placeholder for future asynchronous feature support
+remote-templates = ["dep:reqwest"]          # Fetch templates over HTTP/S via create_template_folder
 
 # -----------------------------------------------------------------------------
 # Build Dependencies
@@ -85,9 +85,10 @@ fnv = "1.0"                                 # Fast non-cryptographic hash functi
 # regex is used for regular expression support in the template engine.
 regex = "1.11"
 
-# reqwest is a popular HTTP client for Rust, used for handling remote template fetching.
-# The `blocking` feature allows synchronous HTTP requests.
-reqwest = { version = "0.12", features = ["json", "blocking"] }
+# reqwest powers the optional remote-template fetcher. Gated behind the
+# `remote-templates` feature so the core crate has no networking code in
+# its default build. rustls + native-roots avoids pulling OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"], optional = true }
 
 # serde is used for serializing and deserializing data structures, including JSON.
 # The `derive` feature simplifies the process of creating serializable and deserializable structs.
