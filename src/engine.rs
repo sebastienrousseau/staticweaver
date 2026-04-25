@@ -281,16 +281,22 @@ impl Engine {
                 None => (key_trimmed, false),
             };
 
-            let value = context.get(lookup).ok_or_else(|| {
+            // Resolve via dot-notation path so nested values are
+            // reachable (e.g. `{{user.name}}`). Display formats every
+            // primitive variant inline; non-leaf List/Map render as
+            // empty strings, which is the correct behaviour for direct
+            // substitution (control-flow blocks consume those types).
+            let value = context.get_path(lookup).ok_or_else(|| {
                 EngineError::Render(format!(
                     "Unresolved template tag: {lookup}"
                 ))
             })?;
+            let rendered = value.to_string();
 
             if raw || !self.escape_html {
-                output.push_str(value);
+                output.push_str(&rendered);
             } else {
-                escape_html_into(value, &mut output);
+                escape_html_into(&rendered, &mut output);
             }
 
             rest = &after_open[end + close.len()..];
@@ -702,6 +708,51 @@ mod tests {
             result,
             "Hi &lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt;"
         );
+    }
+
+    #[test]
+    fn render_template_resolves_dot_notation() {
+        use crate::context::Value;
+        use fnv::FnvHashMap;
+
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut user = FnvHashMap::default();
+        let _ = user.insert(
+            "name".to_string(),
+            Value::String("Ada".to_string()),
+        );
+        let mut ctx = Context::new();
+        ctx.set_value("user".to_string(), Value::Map(user));
+
+        let out = engine
+            .render_template("Hello, {{user.name}}!", &ctx)
+            .unwrap();
+        assert_eq!(out, "Hello, Ada!");
+    }
+
+    #[test]
+    fn render_template_renders_primitive_values() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("count".to_string(), 42);
+        ctx.set_value("active".to_string(), true);
+
+        let out = engine
+            .render_template("count={{count}} active={{active}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "count=42 active=true");
+    }
+
+    #[test]
+    fn render_template_indexes_lists_by_position() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b", "c"]);
+
+        let out = engine
+            .render_template("first={{items.0}} last={{items.2}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "first=a last=c");
     }
 
     #[test]
