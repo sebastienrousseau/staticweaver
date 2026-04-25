@@ -821,13 +821,108 @@ mod tests {
     }
 
     #[test]
+    fn value_from_string_owned() {
+        let s = "owned".to_string();
+        let v = Value::from(s);
+        assert_eq!(v.as_str(), Some("owned"));
+    }
+
+    #[test]
+    fn value_map_truthiness() {
+        let mut m = FnvHashMap::default();
+        assert!(!Value::Map(m.clone()).is_truthy());
+        let _ = m.insert("k".to_string(), Value::Null);
+        assert!(Value::Map(m).is_truthy());
+    }
+
+    #[test]
     fn hash_distinguishes_value_variants_with_same_payload() {
         // Bool(true) and Number(1) must not collide under the
         // tagged-variant hashing scheme.
         let mut a = Context::new();
         a.set_value("k".to_string(), true);
         let mut b = Context::new();
-        b.set_value("k".to_string(), 1);
+        b.set_value("k".to_string(), 1i64);
         assert_ne!(a.hash(), b.hash());
+
+        // Null and String("") must not collide.
+        let mut c = Context::new();
+        c.set_value("k".to_string(), Value::Null);
+        let mut d = Context::new();
+        d.set_value("k".to_string(), "");
+        assert_ne!(c.hash(), d.hash());
+    }
+
+    #[test]
+    fn hash_value_list_and_map() {
+        let mut a = Context::new();
+        a.set_value("k".to_string(), vec![1, 2]);
+        let mut b = Context::new();
+        b.set_value("k".to_string(), vec![1, 2]);
+        assert_eq!(a.hash(), b.hash());
+
+        let mut c = Context::new();
+        let mut m = FnvHashMap::default();
+        let _ = m.insert("x".to_string(), Value::Number(1));
+        c.set_value("m".to_string(), Value::Map(m));
+
+        let mut d = Context::new();
+        let mut m2 = FnvHashMap::default();
+        let _ = m2.insert("x".to_string(), Value::Number(1));
+        d.set_value("m".to_string(), Value::Map(m2));
+        assert_eq!(c.hash(), d.hash());
+    }
+
+    #[test]
+    fn context_get_non_string_returns_none() {
+        let mut ctx = Context::new();
+        ctx.set_value("k".to_string(), 42);
+        assert_eq!(ctx.get("k"), None);
+    }
+
+    #[test]
+    fn context_get_mut_non_string_returns_none() {
+        let mut ctx = Context::new();
+        ctx.set_value("k".to_string(), 42);
+        assert_eq!(ctx.get_mut("k"), None);
+    }
+
+    #[test]
+    fn context_remove_non_string_returns_none() {
+        let mut ctx = Context::new();
+        ctx.set_value("k".to_string(), 42);
+        assert_eq!(ctx.remove("k"), None);
+        assert!(ctx.is_empty());
+    }
+
+    #[test]
+    fn value_as_str_non_string_returns_none() {
+        assert_eq!(Value::Null.as_str(), None);
+        assert_eq!(Value::Bool(true).as_str(), None);
+        assert_eq!(Value::Number(1).as_str(), None);
+    }
+
+    #[test]
+    fn value_get_path_mismatch_returns_none() {
+        let v = Value::Number(42);
+        assert_eq!(v.get_path("any.path"), None);
+
+        let list = Value::from(vec![1]);
+        assert_eq!(list.get_path("0.child"), None);
+    }
+
+    #[test]
+    fn value_from_i32_and_i64() {
+        let v32 = Value::from(42i32);
+        let v64 = Value::from(42i64);
+        assert_eq!(v32, v64);
+    }
+
+    #[test]
+    fn context_get_path_empty_returns_none() {
+        let ctx = Context::new();
+        // splitn(2, '.') on empty string yields [""]
+        // elements.get("") returns None.
+        assert_eq!(ctx.get_path(""), None);
     }
 }

@@ -135,7 +135,8 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
 
     /// Inserts a key-value pair into the cache.
     ///
-    /// If the cache is at capacity and the key doesn't already exist, the new item won't be inserted.
+    /// If the cache is at capacity and the key doesn't already exist, the
+    /// least-recently-used entry is evicted to make room.
     ///
     /// # Arguments
     ///
@@ -412,8 +413,10 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
     }
 
     /// Sets a maximum capacity for the cache.
-    /// If the cache is already larger than this capacity, it will not remove items,
-    /// but it will prevent new items from being added until it's below capacity.
+    ///
+    /// If the cache is already larger than this capacity, it will not
+    /// remove items immediately, but it will prevent new items from being
+    /// added until it's below capacity (via LRU eviction on `insert`).
     ///
     /// # Arguments
     ///
