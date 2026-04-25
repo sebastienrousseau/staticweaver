@@ -228,9 +228,30 @@ impl Engine {
             ));
         }
 
+        let mut output = String::with_capacity(template.len());
+        self.render_into(template, context, &mut output)?;
+        Ok(output)
+    }
+
+    /// Recursive rendering core. Walks `template`, dispatching on tag
+    /// shape:
+    ///
+    ///   - `{{ key }}`             — substitute a value
+    ///   - `{{!key}}`              — substitute without HTML escape
+    ///   - `{{#if key}}…{{/if}}`   — conditional block (optional `{{else}}`)
+    ///   - `{{#each list}}…{{/each}}` — iterate a `Value::List`, binding
+    ///     each element to `this`
+    ///
+    /// Block bodies are rendered through this same function, so escaping,
+    /// dot-notation, and nested control flow compose without duplication.
+    fn render_into(
+        &self,
+        template: &str,
+        context: &Context,
+        output: &mut String,
+    ) -> Result<(), EngineError> {
         let open = self.open_delim.as_str();
         let close = self.close_delim.as_str();
-        let mut output = String::with_capacity(template.len());
         let mut rest = template;
 
         while let Some(start) = rest.find(open) {
@@ -246,64 +267,115 @@ impl Engine {
             }
             let text_end = start - bs;
             output.push_str(&rest[..text_end]);
-            // Every pair of backslashes collapses to a single literal.
             for _ in 0..bs / 2 {
                 output.push('\\');
             }
             if bs % 2 == 1 {
-                // Odd -> emit the delimiter literally and continue.
                 output.push_str(open);
                 rest = &rest[start + open.len()..];
                 continue;
             }
 
             let after_open = &rest[start + open.len()..];
-
             let end = after_open.find(close).ok_or_else(|| {
                 EngineError::InvalidTemplate(
                     "Unclosed template tag".to_string(),
                 )
             })?;
-
             let key_raw = &after_open[..end];
 
-            // Reject an opening delimiter inside the key — catches both
-            // nested tags and malformed input like `{{foo{{bar}}}}`.
             if key_raw.contains(open) {
                 return Err(EngineError::InvalidTemplate(
                     "Nested delimiters are not allowed".to_string(),
                 ));
             }
 
+            let after_tag = &after_open[end + close.len()..];
             let key_trimmed = key_raw.trim();
+
+            // ── Block dispatch ──────────────────────────────────────
+            if let Some(arg) = key_trimmed.strip_prefix("#if") {
+                let arg = arg.trim();
+                let (body, after_block) =
+                    extract_block(after_tag, "if", open, close)?;
+                let (then_body, else_body) =
+                    split_else(body, open, close);
+                let cond = context
+                    .get_path(arg)
+                    .map_or(false, |v| v.is_truthy());
+                let chosen = if cond {
+                    then_body
+                } else {
+                    else_body.unwrap_or("")
+                };
+                if !chosen.is_empty() {
+                    self.render_into(chosen, context, output)?;
+                }
+                rest = after_block;
+                continue;
+            }
+
+            if let Some(arg) = key_trimmed.strip_prefix("#each") {
+                let arg = arg.trim();
+                let (body, after_block) =
+                    extract_block(after_tag, "each", open, close)?;
+                let list = context.get_path(arg).ok_or_else(|| {
+                    EngineError::Render(format!(
+                        "#each: unresolved list `{arg}`"
+                    ))
+                })?;
+                let items = match list {
+                    crate::context::Value::List(items) => items,
+                    other => {
+                        return Err(EngineError::InvalidTemplate(
+                            format!(
+                                "#each expects a list, got {other:?}"
+                            ),
+                        ));
+                    }
+                };
+                for item in items {
+                    let mut child = context.clone();
+                    child.set_value("this".to_string(), item.clone());
+                    self.render_into(body, &child, output)?;
+                }
+                rest = after_block;
+                continue;
+            }
+
+            // Stray closing / else markers at top level are a template
+            // authoring error.
+            if key_trimmed.starts_with("/if")
+                || key_trimmed.starts_with("/each")
+                || key_trimmed == "else"
+            {
+                return Err(EngineError::InvalidTemplate(format!(
+                    "unexpected `{key_trimmed}` outside a block"
+                )));
+            }
+
+            // ── Plain substitution ──────────────────────────────────
             let (lookup, raw) = match key_trimmed.strip_prefix('!') {
                 Some(stripped) => (stripped.trim_start(), true),
                 None => (key_trimmed, false),
             };
-
-            // Resolve via dot-notation path so nested values are
-            // reachable (e.g. `{{user.name}}`). Display formats every
-            // primitive variant inline; non-leaf List/Map render as
-            // empty strings, which is the correct behaviour for direct
-            // substitution (control-flow blocks consume those types).
             let value = context.get_path(lookup).ok_or_else(|| {
                 EngineError::Render(format!(
                     "Unresolved template tag: {lookup}"
                 ))
             })?;
             let rendered = value.to_string();
-
             if raw || !self.escape_html {
                 output.push_str(&rendered);
             } else {
-                escape_html_into(&rendered, &mut output);
+                escape_html_into(&rendered, output);
             }
 
-            rest = &after_open[end + close.len()..];
+            rest = after_tag;
         }
 
         output.push_str(rest);
-        Ok(output)
+        Ok(())
     }
 
     /// Sets custom delimiters for the template tags.
@@ -593,6 +665,89 @@ fn is_url(path: &str) -> bool {
     path.starts_with("http://") || path.starts_with("https://")
 }
 
+/// Locates the body and the byte index following the matching closer for
+/// a `#if` / `#each` block. `template` is positioned immediately after the
+/// opener — i.e. the first character of the body.
+///
+/// Walks the template counting block depth so that nested `#if` inside
+/// `#each` (and vice versa) match correctly. Returns `(body, after_close)`
+/// where `body` is the text between the opener and the matching closer
+/// and `after_close` is the substring beginning immediately after the
+/// closing tag.
+fn extract_block<'a>(
+    template: &'a str,
+    block: &str,
+    open: &str,
+    close: &str,
+) -> Result<(&'a str, &'a str), EngineError> {
+    let mut depth: usize = 1;
+    let mut cursor = 0usize;
+    while let Some(rel) = template[cursor..].find(open) {
+        let abs = cursor + rel;
+        let after_open = &template[abs + open.len()..];
+        let end = after_open.find(close).ok_or_else(|| {
+            EngineError::InvalidTemplate(
+                "Unclosed template tag".to_string(),
+            )
+        })?;
+        let inner = after_open[..end].trim();
+        let tag_end = abs + open.len() + end + close.len();
+
+        if inner.starts_with("#if") || inner.starts_with("#each") {
+            depth += 1;
+        } else if inner == format!("/{block}") {
+            depth -= 1;
+            if depth == 0 {
+                let body = &template[..abs];
+                let after = &template[tag_end..];
+                return Ok((body, after));
+            }
+        } else if inner.starts_with("/if") || inner.starts_with("/each")
+        {
+            // Closer for a different block type — must come from an
+            // inner depth, decrement accordingly.
+            depth -= 1;
+        }
+        cursor = tag_end;
+    }
+    Err(EngineError::InvalidTemplate(format!(
+        "Unclosed `{{{{#{block}}}}}` block"
+    )))
+}
+
+/// Splits a `#if` body at the top-level `{{else}}`, if any. Returns
+/// `(then_body, else_body)`. Nested blocks are skipped via the same depth
+/// counter used by [`extract_block`].
+fn split_else<'a>(
+    body: &'a str,
+    open: &str,
+    close: &str,
+) -> (&'a str, Option<&'a str>) {
+    let mut depth: usize = 0;
+    let mut cursor = 0usize;
+    while let Some(rel) = body[cursor..].find(open) {
+        let abs = cursor + rel;
+        let after_open = &body[abs + open.len()..];
+        let Some(end) = after_open.find(close) else {
+            // Malformed — let the recursive render call surface the error.
+            break;
+        };
+        let inner = after_open[..end].trim();
+        let tag_end = abs + open.len() + end + close.len();
+
+        if inner.starts_with("#if") || inner.starts_with("#each") {
+            depth += 1;
+        } else if inner.starts_with("/if") || inner.starts_with("/each")
+        {
+            depth = depth.saturating_sub(1);
+        } else if inner == "else" && depth == 0 {
+            return (&body[..abs], Some(&body[tag_end..]));
+        }
+        cursor = tag_end;
+    }
+    (body, None)
+}
+
 /// Appends `s` to `out`, replacing the five HTML metacharacters with their
 /// named/numeric entities. Single-quote uses the numeric `&#x27;` form so
 /// the output stays valid inside both HTML and XML attributes.
@@ -741,6 +896,99 @@ mod tests {
             .render_template("count={{count}} active={{active}}", &ctx)
             .unwrap();
         assert_eq!(out, "count=42 active=true");
+    }
+
+    #[test]
+    fn if_block_renders_when_truthy() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("show".to_string(), true);
+        let out = engine
+            .render_template("{{#if show}}hello{{/if}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn if_block_skips_when_falsy() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("show".to_string(), false);
+        let out = engine
+            .render_template("[{{#if show}}hi{{/if}}]", &ctx)
+            .unwrap();
+        assert_eq!(out, "[]");
+    }
+
+    #[test]
+    fn if_block_with_else_branch() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("on".to_string(), false);
+        let out = engine
+            .render_template("{{#if on}}yes{{else}}no{{/if}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "no");
+    }
+
+    #[test]
+    fn each_block_iterates_list_with_this_binding() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b", "c"]);
+        let out = engine
+            .render_template("{{#each items}}[{{this}}]{{/each}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "[a][b][c]");
+    }
+
+    #[test]
+    fn nested_if_inside_each_resolves() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["x", "y"]);
+        ctx.set_value("show".to_string(), true);
+        let out = engine
+            .render_template(
+                "{{#each items}}{{#if show}}{{this}}{{/if}}{{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "xy");
+    }
+
+    #[test]
+    fn unclosed_if_block_errors() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("on".to_string(), true);
+        let res = engine.render_template("{{#if on}}forever", &ctx);
+        assert!(matches!(
+            res,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("#if")
+        ));
+    }
+
+    #[test]
+    fn stray_close_tag_errors() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let res = engine.render_template("nope {{/if}}", &ctx);
+        assert!(matches!(
+            res,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("/if")
+        ));
+    }
+
+    #[test]
+    fn each_on_non_list_errors() {
+        use crate::context::Value;
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("not_a_list".to_string(), Value::Number(1));
+        let res = engine
+            .render_template("{{#each not_a_list}}x{{/each}}", &ctx);
+        assert!(matches!(res, Err(EngineError::InvalidTemplate(_))));
     }
 
     #[test]

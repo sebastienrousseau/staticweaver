@@ -62,6 +62,47 @@ called out explicitly below).
 - Three new criterion benches (`render_template_escape_heavy`,
   `context_hash_100_keys`, `render_template_32_tags`) guard these gains
   against regression.
+- **LRU cache eviction** (breaking) — capacity-pressure inserts now
+  evict the least-recently-used entry instead of clearing the whole
+  cache. `Cache::get` becomes `&mut self` to bump access recency;
+  `Cache<K, V>` adds `K: Clone` to its impl bounds.
+
+### Engine features
+
+- **Backslash-escape opening delimiter** — `\{{literal}}` emits the
+  delimiter as literal text. Even-length backslash runs collapse to
+  literal backslashes; odd-length runs escape the following delimiter.
+- **Configurable downloader file list** — `DEFAULT_TEMPLATE_FILES`
+  exposed as a public constant; new
+  `Engine::create_template_folder_with_files(path, &[…])` lets callers
+  override the historical six-filename set.
+- **Polymorphic `Value` enum** (breaking) — Context now stores
+  `FnvHashMap<String, Value>` with `Null`, `Bool`, `Number`, `String`,
+  `List`, `Map` variants. Backwards-compatible `set(String, String)`
+  still wraps as `Value::String`. Adds `set_value`, `get_value`,
+  `get_path` for typed and dot-notation access. `Value` implements
+  `Display`, `From<String/&str/bool/i32/i64/Vec<V>>`.
+- **Dot-notation lookup** in templates: `{{user.name}}` walks
+  `Value::Map`; `{{items.0}}` indexes `Value::List` by position.
+- **Control-flow blocks** — `{{#if key}}…{{else}}…{{/if}}` (truthy
+  evaluation against `Value::is_truthy`) and `{{#each list}}…{{/each}}`
+  (binds each element to `this`). Block bodies render through the same
+  parser, so escaping, dot-notation, and nested blocks compose
+  naturally. Depth-aware block matching handles nested `#if` inside
+  `#each` correctly.
+- Stray closing tags or `{{else}}` outside a block produce a clear
+  `InvalidTemplate` error.
+
+### Breaking changes (Context API)
+
+- `Context::iter()` now yields `(&String, &Value)` instead of
+  `(&String, &String)`.
+- `Deref / DerefMut<Target = FnvHashMap<String, String>>` removed.
+- `Context::get`, `get_mut`, `remove` return `Option<&String>` /
+  `Option<&mut String>` / `Option<String>` only when the entry is a
+  `Value::String`.
+- `TemplateError::EngineError(Box<EngineError>)` removed (one-way
+  `EngineError::Template(TemplateError)` retained).
 
 ### Changed
 
