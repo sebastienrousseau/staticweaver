@@ -603,11 +603,15 @@ mod tests {
 
     #[test]
     fn test_refresh() {
-        let mut cache = Cache::new(Duration::from_millis(100));
+        // Wide timing margin — shared CI runners (especially the macOS
+        // matrix) can stall between sleeps for tens of ms. Use a 500 ms
+        // TTL with 200 + 200 ms sleeps so the post-refresh checkpoint
+        // sits at t=400 ms with the new expiry at t=200+500=700 ms.
+        let mut cache = Cache::new(Duration::from_millis(500));
         let _ = cache.insert("key1".to_string(), 42);
-        sleep(Duration::from_millis(50));
+        sleep(Duration::from_millis(200));
         assert!(cache.refresh(&"key1".to_string()));
-        sleep(Duration::from_millis(75));
+        sleep(Duration::from_millis(200));
         assert_eq!(cache.get(&"key1".to_string()), Some(&42));
         assert!(!cache.refresh(&"key2".to_string()));
     }

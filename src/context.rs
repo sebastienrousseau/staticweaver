@@ -4,9 +4,9 @@
 //! # Context Module
 //!
 //! Stores the key-value bindings consumed by the template engine. Values
-//! are richer than plain strings: a [`Value`] enum carries `Null`, `Bool`,
+//! are richer than plain strings: a `Value` enum carries `Null`, `Bool`,
 //! `Number`, `String`, `List`, and `Map` variants, and the engine resolves
-//! dot-separated lookups (`{{user.name}}`) by walking a [`Value::Map`].
+//! dot-separated lookups (`{{user.name}}`) by walking a `Value::Map`.
 
 use fnv::FnvHashMap;
 use std::collections::hash_map::DefaultHasher;
