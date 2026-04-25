@@ -312,8 +312,42 @@ impl Engine {
                 ));
             }
 
-            let after_tag = &after_open[end + close.len()..];
-            let key_trimmed = key_raw.trim();
+            // Whitespace control:
+            //   {{- ... }}  strips trailing whitespace from `output`.
+            //   {{ ... -}}  skips leading whitespace in the next chunk.
+            //   {{- ... -}} does both.
+            // The dashes must be the first / last non-whitespace bytes
+            // inside the tag; `{{ - key - }}` (space-padded) is *not* a
+            // whitespace marker — it parses as the key string `- key -`,
+            // which would error as unresolved.
+            //
+            // Block comments `{{!-- ... --}}` are exempt from whitespace
+            // control because their closing marker literally is `--`,
+            // which would otherwise be mis-detected as a strip-right.
+            // Inline comments still compose with stripping via
+            // `{{- ! note -}}`.
+            let mut key_trimmed: &str = key_raw.trim();
+            let is_block_comment = key_trimmed.starts_with("!--");
+            let strip_left =
+                !is_block_comment && key_trimmed.starts_with('-');
+            if strip_left {
+                key_trimmed = key_trimmed[1..].trim_start();
+                let kept = output.trim_end().len();
+                output.truncate(kept);
+            }
+            let strip_right =
+                !is_block_comment && key_trimmed.ends_with('-');
+            if strip_right {
+                key_trimmed =
+                    key_trimmed[..key_trimmed.len() - 1].trim_end();
+            }
+
+            let after_tag_raw = &after_open[end + close.len()..];
+            let after_tag = if strip_right {
+                after_tag_raw.trim_start()
+            } else {
+                after_tag_raw
+            };
 
             // ── Block dispatch ──────────────────────────────────────
             if let Some(arg) = key_trimmed.strip_prefix("#if") {
@@ -806,7 +840,10 @@ fn extract_block<'a>(
                 "Unclosed template tag".to_string(),
             )
         })?;
-        let inner = after_open[..end].trim();
+        // Parse whitespace-control flags so `{{- /if -}}` matches `/if`
+        // and trims body / after-block whitespace accordingly.
+        let (inner, strip_l, strip_r) =
+            parse_ws_control(after_open[..end].trim());
         let tag_end = abs + open.len() + end + close.len();
 
         if inner.starts_with("#if") || inner.starts_with("#each") {
@@ -814,8 +851,18 @@ fn extract_block<'a>(
         } else if inner == format!("/{block}") {
             depth -= 1;
             if depth == 0 {
-                let body = &template[..abs];
-                let after = &template[tag_end..];
+                let body_raw = &template[..abs];
+                let body = if strip_l {
+                    body_raw.trim_end()
+                } else {
+                    body_raw
+                };
+                let after_raw = &template[tag_end..];
+                let after = if strip_r {
+                    after_raw.trim_start()
+                } else {
+                    after_raw
+                };
                 return Ok((body, after));
             }
         } else if inner.starts_with("/if") || inner.starts_with("/each")
@@ -829,6 +876,31 @@ fn extract_block<'a>(
     Err(EngineError::InvalidTemplate(format!(
         "Unclosed `{{{{#{block}}}}}` block"
     )))
+}
+
+/// Parses whitespace-control dashes off a (whitespace-trimmed) tag inner.
+/// Returns the inner with any dashes removed, plus two flags reporting
+/// whether a left and/or right dash was present. Block comments
+/// (`!-- … --`) are exempt — the closing `--` is part of their syntax.
+fn parse_ws_control(inner: &str) -> (&str, bool, bool) {
+    if inner.starts_with("!--") {
+        return (inner, false, false);
+    }
+    let (inner, strip_l) = match inner.strip_prefix('-') {
+        Some(rest) => (rest.trim_start(), true),
+        None => (inner, false),
+    };
+    let (inner, strip_r) = match inner.strip_suffix('-') {
+        Some(rest) => (rest.trim_end(), true),
+        None => (inner, false),
+    };
+    (inner, strip_l, strip_r)
+}
+
+/// Convenience: strip whitespace-control dashes and discard the flags
+/// (used by helpers that only need the cleaned inner string for matching).
+fn strip_ws_dashes(inner: &str) -> &str {
+    parse_ws_control(inner).0
 }
 
 /// Splits a `#if` body at the top-level `{{else}}`, if any. Returns
@@ -848,7 +920,7 @@ fn split_else<'a>(
             // Malformed — let the recursive render call surface the error.
             break;
         };
-        let inner = after_open[..end].trim();
+        let inner = strip_ws_dashes(after_open[..end].trim());
         let tag_end = abs + open.len() + end + close.len();
 
         if inner.starts_with("#if") || inner.starts_with("#each") {
@@ -1154,6 +1226,63 @@ mod tests {
         let ctx = Context::new();
         let out = engine.render_template("[{{!}}]", &ctx).unwrap();
         assert_eq!(out, "[]");
+    }
+
+    #[test]
+    fn whitespace_strip_left_removes_trailing_output_spaces() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let out =
+            engine.render_template("hello   {{- name}}", &ctx).unwrap();
+        assert_eq!(out, "helloAda");
+    }
+
+    #[test]
+    fn whitespace_strip_right_skips_leading_chunk_spaces() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let out =
+            engine.render_template("{{name -}}   tail", &ctx).unwrap();
+        assert_eq!(out, "Adatail");
+    }
+
+    #[test]
+    fn whitespace_strip_both_collapses_around_tag() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let out = engine
+            .render_template("a   {{- name -}}\n\n   b", &ctx)
+            .unwrap();
+        assert_eq!(out, "aAdab");
+    }
+
+    #[test]
+    fn whitespace_strip_composes_with_inline_comment() {
+        // `{{- ! note -}}` is "strip left + inline comment + strip right"
+        // — useful as a pure whitespace-eating marker.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template("a   {{- ! note -}}\n\n   b", &ctx)
+            .unwrap();
+        assert_eq!(out, "ab");
+    }
+
+    #[test]
+    fn whitespace_strip_works_on_block_tags() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("on".to_string(), true);
+        let out = engine
+            .render_template(
+                "a   {{- #if on -}}   x   {{- /if -}}   b",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "axb");
     }
 
     #[test]
