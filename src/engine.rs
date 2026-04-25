@@ -486,11 +486,17 @@ impl Engine {
             })?;
             let mut rendered = value.to_string();
 
+            // A trailing `safe` filter marks the value as already-safe
+            // HTML and suppresses the engine's auto-escape. Mirrors the
+            // `{{!key}}` raw opt-out but composes inside a filter chain.
+            let marked_safe =
+                filters.last().is_some_and(|(name, _)| name == "safe");
+
             for (name, args) in &filters {
                 rendered = apply_filter(name, args, rendered)?;
             }
 
-            if raw || !self.escape_html {
+            if raw || marked_safe || !self.escape_html {
                 output.push_str(&rendered);
             } else {
                 escape_html_into(&rendered, output);
@@ -934,10 +940,75 @@ fn apply_filter(
                 Ok(input)
             }
         }
+        // Capitalize: ASCII-flavoured first-letter uppercase, rest as-is.
+        "capitalize" => {
+            let mut chars = input.chars();
+            Ok(match chars.next() {
+                Some(first) => first
+                    .to_uppercase()
+                    .chain(chars)
+                    .collect::<String>(),
+                None => input,
+            })
+        }
+        // Length: Unicode character count for strings.
+        "length" => Ok(input.chars().count().to_string()),
+        // Default: returns the first arg when input is empty,
+        // otherwise the input unchanged. `{{ name | default:"anon" }}`.
+        "default" => {
+            if input.is_empty() {
+                Ok(args.first().cloned().unwrap_or_default())
+            } else {
+                Ok(input)
+            }
+        }
+        // Replace all occurrences of arg 0 with arg 1.
+        "replace" => match (args.first(), args.get(1)) {
+            (Some(from), Some(to)) => Ok(input.replace(from, to)),
+            _ => Err(EngineError::Render(
+                "replace filter requires two args: replace:\"from\",\"to\""
+                    .to_string(),
+            )),
+        },
+        // URL-encode (RFC 3986 unreserved set is preserved). Hand-rolled
+        // to avoid a `urlencoding` dep; correct for query-string use.
+        "urlencode" => Ok(url_encode(&input)),
+        // Mark a value as already safe — emit raw, *without* the engine's
+        // HTML escape on top. This is the filter form of the `{{!key}}`
+        // raw opt-out; callers rendering pre-escaped HTML use it from a
+        // pipeline (`{{ snippet | safe }}`).
+        //
+        // Implementation note: the actual escape suppression is handled
+        // by the dispatch loop checking for a trailing `safe` filter
+        // (see `apply_filter_chain`). Here `safe` is a no-op pass-through
+        // so the chain composes naturally.
+        "safe" => Ok(input),
         unknown => Err(EngineError::Render(format!(
             "Unknown filter: {unknown}"
         ))),
     }
+}
+
+/// RFC 3986 percent-encoding for the unreserved set (`A-Z a-z 0-9 - _ . ~`).
+/// Everything else becomes `%HH`. Hand-rolled to avoid an extra dep.
+fn url_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~' => out.push(byte as char),
+            other => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{other:02X}");
+            }
+        }
+    }
+    out
 }
 
 /// Parses whitespace-control dashes off a (whitespace-trimmed) tag inner.
@@ -1368,6 +1439,118 @@ mod tests {
         let (name, args) = parse_filter("uppercase");
         assert_eq!(name, "uppercase");
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn filter_capitalize_uppercases_first_char() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "alice".to_string());
+        let out = engine
+            .render_template("{{ name | capitalize }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "Alice");
+    }
+
+    #[test]
+    fn filter_length_counts_chars() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Adriana".to_string());
+        let out = engine
+            .render_template("{{ name | length }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "7");
+    }
+
+    #[test]
+    fn filter_default_substitutes_for_empty() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), String::new());
+        let out = engine
+            .render_template(r#"{{ name | default:"anon" }}"#, &ctx)
+            .unwrap();
+        assert_eq!(out, "anon");
+    }
+
+    #[test]
+    fn filter_default_passes_through_non_empty() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let out = engine
+            .render_template(r#"{{ name | default:"anon" }}"#, &ctx)
+            .unwrap();
+        assert_eq!(out, "Ada");
+    }
+
+    #[test]
+    fn filter_replace_substitutes_substring() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("msg".to_string(), "hello world".to_string());
+        let out = engine
+            .render_template(
+                r#"{{ msg | replace:"world","there" }}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "hello there");
+    }
+
+    #[test]
+    fn filter_replace_errors_without_two_args() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("msg".to_string(), "x".to_string());
+        let err = engine
+            .render_template(r#"{{ msg | replace:"only" }}"#, &ctx)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::Render(msg) if msg.contains("two args"),
+        ));
+    }
+
+    #[test]
+    fn filter_urlencode_handles_special_chars() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("q".to_string(), "rust lang & you".to_string());
+        let out = engine
+            .render_template("{{ q | urlencode }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "rust%20lang%20%26%20you");
+    }
+
+    #[test]
+    fn filter_safe_suppresses_html_escape() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("body".to_string(), "<b>hi</b>".to_string());
+        // Without `safe`, default escape applies.
+        let escaped =
+            engine.render_template("{{ body }}", &ctx).unwrap();
+        assert_eq!(escaped, "&lt;b&gt;hi&lt;/b&gt;");
+        // With trailing `safe`, raw output.
+        let raw =
+            engine.render_template("{{ body | safe }}", &ctx).unwrap();
+        assert_eq!(raw, "<b>hi</b>");
+    }
+
+    #[test]
+    fn filters_compose_in_chain() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("title".to_string(), "  hello world  ".to_string());
+        let out = engine
+            .render_template(
+                "{{ title | trim | capitalize | truncate:8 }}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "Hello...");
     }
 
     #[test]
