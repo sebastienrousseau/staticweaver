@@ -123,6 +123,15 @@ impl Value {
 
     /// Returns the inner string for `Value::String`, otherwise `None`.
     /// Convenience for the back-compat `Context::get` shape.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::context::Value;
+    ///
+    /// assert_eq!(Value::String("hi".to_string()).as_str(), Some("hi"));
+    /// assert_eq!(Value::Number(42).as_str(), None);
+    /// ```
     #[must_use]
     pub fn as_str(&self) -> Option<&str> {
         match self {
