@@ -380,24 +380,59 @@ impl Engine {
                 let arg = arg.trim();
                 let (body, after_block) =
                     extract_block(after_tag, "each", open, close)?;
-                let list = context.get_path(arg).ok_or_else(|| {
-                    EngineError::Render(format!(
-                        "#each: unresolved list `{arg}`"
-                    ))
-                })?;
-                let items = match list {
-                    crate::context::Value::List(items) => items,
+                let target =
+                    context.get_path(arg).ok_or_else(|| {
+                        EngineError::Render(format!(
+                            "#each: unresolved list `{arg}`"
+                        ))
+                    })?;
+                // Iterate Lists by position (binds @index/@first/@last)
+                // and Maps by key (also binds @key). Sort Map entries by
+                // key so iteration order is deterministic across runs —
+                // FnvHashMap iteration order is otherwise unspecified.
+                let entries: Vec<(
+                    Option<String>,
+                    &crate::context::Value,
+                )> = match target {
+                    crate::context::Value::List(items) => {
+                        items.iter().map(|v| (None, v)).collect()
+                    }
+                    crate::context::Value::Map(map) => {
+                        let mut keyed: Vec<_> = map.iter().collect();
+                        keyed.sort_by(|a, b| a.0.cmp(b.0));
+                        keyed
+                            .into_iter()
+                            .map(|(k, v)| (Some(k.clone()), v))
+                            .collect()
+                    }
                     other => {
                         return Err(EngineError::InvalidTemplate(
-                            format!(
-                                "#each expects a list, got {other:?}"
-                            ),
-                        ));
+                                format!(
+                                    "#each expects a list or map, got {other:?}"
+                                ),
+                            ));
                     }
                 };
-                for item in items {
+
+                let total = entries.len();
+                for (index, (key_opt, item)) in
+                    entries.iter().enumerate()
+                {
                     let mut child = context.clone();
-                    child.set_value("this".to_string(), item.clone());
+                    child
+                        .set_value("this".to_string(), (*item).clone());
+                    child.set_value(
+                        "@index".to_string(),
+                        i64::try_from(index).unwrap_or(i64::MAX),
+                    );
+                    child.set_value("@first".to_string(), index == 0);
+                    child.set_value(
+                        "@last".to_string(),
+                        index + 1 == total,
+                    );
+                    if let Some(k) = key_opt {
+                        child.set_value("@key".to_string(), k.as_str());
+                    }
                     self.render_recursive(
                         body,
                         &child,
@@ -1537,6 +1572,57 @@ mod tests {
         let raw =
             engine.render_template("{{ body | safe }}", &ctx).unwrap();
         assert_eq!(raw, "<b>hi</b>");
+    }
+
+    #[test]
+    fn each_binds_index_first_last_for_lists() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b", "c"]);
+        let out = engine
+            .render_template(
+                "{{#each items}}[{{@index}}={{this}} f={{@first}} l={{@last}}]{{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(
+            out,
+            "[0=a f=true l=false][1=b f=false l=false][2=c f=false l=true]",
+        );
+    }
+
+    #[test]
+    fn each_iterates_maps_with_key_binding() {
+        use crate::context::Value;
+        use fnv::FnvHashMap;
+
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut prefs = FnvHashMap::default();
+        let _ = prefs.insert("color".to_string(), Value::from("blue"));
+        let _ = prefs.insert("size".to_string(), Value::from("M"));
+        let mut ctx = Context::new();
+        ctx.set_value("prefs".to_string(), Value::Map(prefs));
+
+        // Map iteration is sorted by key for deterministic output.
+        let out = engine
+            .render_template(
+                "{{#each prefs}}{{@key}}={{this}} {{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "color=blue size=M ");
+    }
+
+    #[test]
+    fn each_on_empty_list_renders_nothing() {
+        use crate::context::Value;
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("xs".to_string(), Value::List(Vec::new()));
+        let out = engine
+            .render_template("[{{#each xs}}x{{/each}}]", &ctx)
+            .unwrap();
+        assert_eq!(out, "[]");
     }
 
     #[test]
