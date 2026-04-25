@@ -470,12 +470,13 @@ impl Engine {
                 None => (key_trimmed, false),
             };
 
-            // Split lookup from filters (e.g. "title | uppercase")
+            // Split lookup from filters: `title | uppercase`,
+            // `desc | truncate:50`, `name | replace:"a","b" | lowercase`.
             let mut parts = lookup_raw.split('|');
             let lookup = parts.next().unwrap_or("").trim();
-            let filters: Vec<&str> = parts
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
+            let filters: Vec<(String, Vec<String>)> = parts
+                .map(parse_filter)
+                .filter(|(name, _)| !name.is_empty())
                 .collect();
 
             let value = context.get_path(lookup).ok_or_else(|| {
@@ -485,26 +486,8 @@ impl Engine {
             })?;
             let mut rendered = value.to_string();
 
-            // Apply filters in sequence
-            for filter in filters {
-                match filter {
-                    "uppercase" => rendered = rendered.to_uppercase(),
-                    "lowercase" => rendered = rendered.to_lowercase(),
-                    "trim" => rendered = rendered.trim().to_string(),
-                    "truncate" => {
-                        // Default truncate to 30 chars if no arg (args
-                        // not yet supported by parser).
-                        if rendered.len() > 30 {
-                            rendered.truncate(27);
-                            rendered.push_str("...");
-                        }
-                    }
-                    unknown => {
-                        return Err(EngineError::Render(format!(
-                            "Unknown filter: {unknown}"
-                        )));
-                    }
-                }
+            for (name, args) in &filters {
+                rendered = apply_filter(name, args, rendered)?;
             }
 
             if raw || !self.escape_html {
@@ -876,6 +859,85 @@ fn extract_block<'a>(
     Err(EngineError::InvalidTemplate(format!(
         "Unclosed `{{{{#{block}}}}}` block"
     )))
+}
+
+/// Parses a single filter spec from the right-hand side of a `|` chain.
+/// Accepts `name`, `name:arg`, or `name:arg1,arg2,...`. Arguments may be
+/// quoted with single or double quotes (so commas can appear inside an
+/// arg). Returns `(name, args)` with surrounding whitespace removed.
+fn parse_filter(spec: &str) -> (String, Vec<String>) {
+    let spec = spec.trim();
+    let (name, args_str) = match spec.find(':') {
+        Some(i) => (&spec[..i], &spec[i + 1..]),
+        None => (spec, ""),
+    };
+    let args = if args_str.is_empty() {
+        Vec::new()
+    } else {
+        parse_filter_args(args_str)
+    };
+    (name.trim().to_string(), args)
+}
+
+/// Splits a filter argument list on `,`, honouring single- and
+/// double-quoted spans so a quoted comma is preserved verbatim. Quotes
+/// themselves are stripped from the returned argument values.
+fn parse_filter_args(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut in_quote: Option<char> = None;
+    for c in s.chars() {
+        match (c, in_quote) {
+            ('"', None) => in_quote = Some('"'),
+            ('\'', None) => in_quote = Some('\''),
+            (q, Some(open)) if q == open => in_quote = None,
+            (',', None) => {
+                out.push(std::mem::take(&mut buf).trim().to_string());
+            }
+            (c, _) => buf.push(c),
+        }
+    }
+    let last = buf.trim().to_string();
+    if !last.is_empty() || !out.is_empty() {
+        out.push(last);
+    }
+    out
+}
+
+/// Applies a single named filter to `input`. Filters that need
+/// arguments parse them out of `args`; missing arguments fall back to
+/// each filter's documented default. Unknown filter names are reported
+/// as a `Render` error so authors get a clear pointer.
+fn apply_filter(
+    name: &str,
+    args: &[String],
+    input: String,
+) -> Result<String, EngineError> {
+    match name {
+        "uppercase" => Ok(input.to_uppercase()),
+        "lowercase" => Ok(input.to_lowercase()),
+        "trim" => Ok(input.trim().to_string()),
+        "truncate" => {
+            // Default 30 chars (Unicode-aware), suffix "..." appended.
+            let limit: usize =
+                args.first().and_then(|s| s.parse().ok()).unwrap_or(30);
+            let suffix = "...";
+            let n = input.chars().count();
+            if n > limit {
+                let head_len =
+                    limit.saturating_sub(suffix.chars().count());
+                let mut head: String =
+                    input.chars().take(head_len).collect();
+                head.push_str(suffix);
+                Ok(head)
+            } else {
+                Ok(input)
+            }
+        }
+        unknown => Err(EngineError::Render(format!(
+            "Unknown filter: {unknown}"
+        ))),
+    }
 }
 
 /// Parses whitespace-control dashes off a (whitespace-trimmed) tag inner.
@@ -1269,6 +1331,62 @@ mod tests {
             .render_template("a   {{- ! note -}}\n\n   b", &ctx)
             .unwrap();
         assert_eq!(out, "ab");
+    }
+
+    #[test]
+    fn filter_truncate_accepts_explicit_limit() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("body".to_string(), "hello world".to_string());
+        let out = engine
+            .render_template("{{ body | truncate:8 }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "hello...");
+    }
+
+    #[test]
+    fn filter_truncate_falls_back_to_default_30() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("body".to_string(), "x".repeat(50).to_string());
+        let out = engine
+            .render_template("{{ body | truncate }}", &ctx)
+            .unwrap();
+        assert_eq!(out.chars().count(), 30);
+        assert!(out.ends_with("..."));
+    }
+
+    #[test]
+    fn parse_filter_recognises_quoted_commas() {
+        let (name, args) = parse_filter(r#"replace:"a, b","c""#);
+        assert_eq!(name, "replace");
+        assert_eq!(args, vec!["a, b".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn parse_filter_handles_no_args() {
+        let (name, args) = parse_filter("uppercase");
+        assert_eq!(name, "uppercase");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn unknown_filter_errors_with_clear_message() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "y".to_string());
+        let err = engine
+            .render_template("{{ x | nonexistent }}", &ctx)
+            .unwrap_err();
+        match err {
+            EngineError::Render(msg) => {
+                assert!(
+                    msg.contains("Unknown filter: nonexistent"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected Render, got {other:?}"),
+        }
     }
 
     #[test]
