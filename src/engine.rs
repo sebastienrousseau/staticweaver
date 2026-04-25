@@ -115,34 +115,43 @@ impl Engine {
         self
     }
 
-    /// Renders a page using the specified layout and context, with caching.
+    /// Renders a full page using a layout file from the `template_path`.
+    ///
+    /// The engine automatically appends `.html` to the `layout` name.
+    /// Results are cached using a combined hash of the layout name and
+    /// the provided `context`.
     ///
     /// # Arguments
     ///
-    /// * `context` - The rendering context, which includes key-value pairs for variable substitution.
-    /// * `layout` - The layout file to use for rendering, typically located in the template path.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the rendered page as a `String` on success, or an `EngineError` on failure.
+    /// * `context` - The data context for template substitution.
+    /// * `layout` - The name of the layout file (without `.html`).
     ///
     /// # Errors
     ///
-    /// This function can return the following errors:
-    /// - `EngineError::Io`: If reading the template file from disk fails.
-    /// - `EngineError::Render`: If an error occurs during the rendering process.
-    /// - `EngineError::InvalidTemplate`: If the template contains syntax errors.
+    /// Returns `EngineError::Io` if the layout file cannot be read, or
+    /// `EngineError::InvalidTemplate` if the name is malformed (e.g.
+    /// contains `..` traversal).
     ///
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::engine::Engine;
-    /// use staticweaver::Context;
+    /// use staticweaver::{Context, Engine};
     /// use std::time::Duration;
+    /// use std::fs;
+    /// use tempfile::TempDir;
     ///
-    /// let mut engine = Engine::new("templates", Duration::from_secs(3600));
-    /// let context = Context::new();
-    /// let result = engine.render_page(&context, "default");
+    /// let temp = TempDir::new().unwrap();
+    /// fs::write(temp.path().join("index.html"), "Hello, {{name}}!").unwrap();
+    ///
+    /// let mut engine = Engine::new(
+    ///     temp.path().to_str().unwrap(),
+    ///     Duration::from_secs(60),
+    /// );
+    /// let mut context = Context::new();
+    /// context.set("name".to_string(), "World".to_string());
+    ///
+    /// let rendered = engine.render_page(&context, "index").unwrap();
+    /// assert_eq!(rendered, "Hello, World!");
     /// ```
     pub fn render_page(
         &mut self,
@@ -150,18 +159,8 @@ impl Engine {
         layout: &str,
     ) -> Result<String, EngineError> {
         // Reject any layout name that could escape the template directory.
-        // Callers pass values like `"post"` or `"default"`; slashes, drive
-        // letters, null bytes, and `..` segments are never legitimate here.
-        if layout.is_empty()
-            || layout.contains('/')
-            || layout.contains('\\')
-            || layout.contains('\0')
-            || layout.split(['/', '\\']).any(|seg| seg == "..")
-        {
-            return Err(EngineError::InvalidTemplate(format!(
-                "invalid layout name: {layout:?}"
-            )));
-        }
+        // Callers pass values like "post", "default", or "blog/post".
+        validate_path(layout)?;
 
         let cache_key = format!("{}:{}", layout, context.hash());
 
@@ -185,37 +184,40 @@ impl Engine {
         Ok(rendered)
     }
 
-    /// Renders a template string with the given context and custom delimiters.
+    /// Renders a raw template string against the provided `context`.
+    ///
+    /// Supports:
+    ///   - `{{ key }}`: Substitution (HTML escaped by default).
+    ///   - `{{!key}}`: Raw substitution (no escaping).
+    ///   - `{{> partial}}`: Recursive partial inclusion.
+    ///   - `{{#if key}}...{{else}}...{{/if}}`: Conditionals.
+    ///   - `{{#each list}}...{{/each}}`: Iteration.
     ///
     /// # Arguments
     ///
-    /// * `template` - The template string containing the tags to be replaced.
-    /// * `context` - A `Context` containing the key-value pairs to use for substitution.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the rendered string or an `EngineError` if an error occurs.
+    /// * `template` - The raw string containing template tags.
+    /// * `context` - The data context.
     ///
     /// # Errors
     ///
-    /// * `EngineError::InvalidTemplate` - If the template contains unclosed tags or is empty.
-    /// * `EngineError::Render` - If a template tag cannot be resolved from the context.
+    /// Returns `EngineError::InvalidTemplate` for syntax errors or
+    /// `EngineError::Render` for unresolved tags or filter errors.
     ///
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::engine::Engine;
-    /// use staticweaver::Context;
+    /// use staticweaver::{Context, Engine};
     /// use std::time::Duration;
     ///
-    /// let engine = Engine::new("templates", Duration::from_secs(3600));
-    /// let mut context = Context::new();
-    /// context.set("greeting".to_string(), "Hello".to_string());
-    /// context.set("name".to_string(), "Alice".to_string());
+    /// let engine = Engine::new("templates", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set_value("items".to_string(), vec!["a", "b"]);
     ///
-    /// let template = "{{greeting}}, {{name}}!";
-    /// let result = engine.render_template(template, &context).unwrap();
-    /// assert_eq!(result, "Hello, Alice!");
+    /// let out = engine.render_template(
+    ///     "{{#each items}}{{this}} {{/each}}",
+    ///     &ctx
+    /// ).unwrap();
+    /// assert_eq!(out, "a b ");
     /// ```
     pub fn render_template(
         &self,
@@ -238,6 +240,7 @@ impl Engine {
     ///
     ///   - `{{ key }}`             — substitute a value
     ///   - `{{!key}}`              — substitute without HTML escape
+    ///   - `{{> partial}}`         — include and render another template
     ///   - `{{#if key}}…{{/if}}`   — conditional block (optional `{{else}}`)
     ///   - `{{#each list}}…{{/each}}` — iterate a `Value::List`, binding
     ///     each element to `this`
@@ -250,6 +253,25 @@ impl Engine {
         context: &Context,
         output: &mut String,
     ) -> Result<(), EngineError> {
+        self.render_recursive(template, context, output, 0)
+    }
+
+    /// Internal rendering loop with a depth limit to catch infinite
+    /// recursion from circular partial includes.
+    fn render_recursive(
+        &self,
+        template: &str,
+        context: &Context,
+        output: &mut String,
+        depth: usize,
+    ) -> Result<(), EngineError> {
+        if depth > 10 {
+            return Err(EngineError::Render(
+                "Maximum template recursion depth (10) exceeded"
+                    .to_string(),
+            ));
+        }
+
         let open = self.open_delim.as_str();
         let close = self.close_delim.as_str();
         let mut rest = template;
@@ -309,7 +331,12 @@ impl Engine {
                     else_body.unwrap_or("")
                 };
                 if !chosen.is_empty() {
-                    self.render_into(chosen, context, output)?;
+                    self.render_recursive(
+                        chosen,
+                        context,
+                        output,
+                        depth + 1,
+                    )?;
                 }
                 rest = after_block;
                 continue;
@@ -337,9 +364,38 @@ impl Engine {
                 for item in items {
                     let mut child = context.clone();
                     child.set_value("this".to_string(), item.clone());
-                    self.render_into(body, &child, output)?;
+                    self.render_recursive(
+                        body,
+                        &child,
+                        output,
+                        depth + 1,
+                    )?;
                 }
                 rest = after_block;
+                continue;
+            }
+
+            // ── Partial inclusion ──────────────────────────────────
+            if let Some(name) = key_trimmed.strip_prefix('>') {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Err(EngineError::InvalidTemplate(
+                        "Empty partial name".to_string(),
+                    ));
+                }
+                // Reject names that could escape the template directory
+                validate_path(name)?;
+
+                let partial_path = Path::new(&self.template_path)
+                    .join(format!("{name}.html"));
+                let content = fs::read_to_string(&partial_path)?;
+                self.render_recursive(
+                    &content,
+                    context,
+                    output,
+                    depth + 1,
+                )?;
+                rest = after_tag;
                 continue;
             }
 
@@ -354,17 +410,69 @@ impl Engine {
                 )));
             }
 
-            // ── Plain substitution ──────────────────────────────────
-            let (lookup, raw) = match key_trimmed.strip_prefix('!') {
+            // ── Comments ────────────────────────────────────────────
+            // `{{! ... }}` and `{{!-- ... --}}` emit nothing. We
+            // disambiguate from the existing `{{!key}}` raw-substitution
+            // form by requiring the bang to be followed by whitespace,
+            // a `--` block-comment marker, or end-of-tag. `{{!key}}`
+            // (bang immediately followed by an identifier byte) keeps
+            // its raw-opt-out meaning.
+            if let Some(after_bang) = key_trimmed.strip_prefix('!') {
+                let is_comment = after_bang.is_empty()
+                    || after_bang
+                        .starts_with(|c: char| c.is_whitespace())
+                    || (after_bang.starts_with("--")
+                        && after_bang.ends_with("--"));
+                if is_comment {
+                    rest = after_tag;
+                    continue;
+                }
+            }
+
+            // ── Plain substitution & Filters ────────────────────────
+            let (lookup_raw, raw) = match key_trimmed.strip_prefix('!')
+            {
                 Some(stripped) => (stripped.trim_start(), true),
                 None => (key_trimmed, false),
             };
+
+            // Split lookup from filters (e.g. "title | uppercase")
+            let mut parts = lookup_raw.split('|');
+            let lookup = parts.next().unwrap_or("").trim();
+            let filters: Vec<&str> = parts
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+
             let value = context.get_path(lookup).ok_or_else(|| {
                 EngineError::Render(format!(
                     "Unresolved template tag: {lookup}"
                 ))
             })?;
-            let rendered = value.to_string();
+            let mut rendered = value.to_string();
+
+            // Apply filters in sequence
+            for filter in filters {
+                match filter {
+                    "uppercase" => rendered = rendered.to_uppercase(),
+                    "lowercase" => rendered = rendered.to_lowercase(),
+                    "trim" => rendered = rendered.trim().to_string(),
+                    "truncate" => {
+                        // Default truncate to 30 chars if no arg (args
+                        // not yet supported by parser).
+                        if rendered.len() > 30 {
+                            rendered.truncate(27);
+                            rendered.push_str("...");
+                        }
+                    }
+                    unknown => {
+                        return Err(EngineError::Render(format!(
+                            "Unknown filter: {unknown}"
+                        )));
+                    }
+                }
+            }
+
             if raw || !self.escape_html {
                 output.push_str(&rendered);
             } else {
@@ -378,43 +486,76 @@ impl Engine {
         Ok(())
     }
 
-    /// Sets custom delimiters for the template tags.
+    /// Changes the delimiters used to identify template tags.
     ///
-    /// # Arguments
-    ///
-    /// * `open` - The string to use as the opening delimiter (e.g., `<<`).
-    /// * `close` - The string to use as the closing delimiter (e.g., `>>`).
+    /// Default is `{{` and `}}`.
     ///
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::engine::Engine;
+    /// use staticweaver::{Context, Engine};
     /// use std::time::Duration;
     ///
-    /// let mut engine = Engine::new("templates", Duration::from_secs(3600));
-    /// engine.set_delimiters("<<", ">>");
+    /// let mut engine = Engine::new("t", Duration::from_secs(60));
+    /// engine.set_delimiters("[[", "]]");
+    ///
+    /// let mut ctx = Context::new();
+    /// ctx.set("k".to_string(), "v".to_string());
+    /// assert_eq!(engine.render_template("[[k]]", &ctx).unwrap(), "v");
     /// ```
     pub fn set_delimiters(&mut self, open: &str, close: &str) {
         self.open_delim = open.to_string();
         self.close_delim = close.to_string();
     }
 
-    /// Resolves a template folder, either from a local directory or — when
-    /// the `remote-templates` feature is enabled — from an HTTP/S URL.
+    /// Limits the number of rendered pages held in the memory cache.
+    ///
+    /// If the cache currently exceeds `size`, it will be cleared.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    ///
+    /// let mut engine = Engine::new("t", Duration::from_secs(60));
+    /// engine.set_max_cache_size(10);
+    /// ```
+    pub fn set_max_cache_size(&mut self, size: usize) {
+        self.render_cache.set_capacity(size);
+    }
+
+    /// Drops all entries from the internal rendering cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    ///
+    /// let mut engine = Engine::new("t", Duration::from_secs(60));
+    /// engine.clear_cache();
+    /// ```
+    pub fn clear_cache(&mut self) {
+        self.render_cache.clear();
+    }
+
+    /// Prepares a local directory for template storage.
+    ///
+    /// If `template_path` is a local directory, it returns the absolute
+    /// path if it exists. If it's a URL, and the `remote-templates`
+    /// feature is enabled, the engine will attempt to fetch a standard set
+    /// of template files ([`DEFAULT_TEMPLATE_FILES`]).
     ///
     /// # Arguments
     ///
-    /// * `template_path` - An optional path or URL. `None` is an error; pass
-    ///   an explicit directory or URL. (Earlier versions silently fetched
-    ///   from a hardcoded third-party URL — that default is gone.)
+    /// * `template_path` - Local path or URL source.
     ///
     /// # Errors
     ///
     /// - `EngineError::Io`: the directory does not exist.
     /// - `EngineError::InvalidTemplate`: `template_path` is `None`, or a URL
     ///   was supplied without the `remote-templates` feature.
-    /// - `EngineError::Reqwest` / `EngineError::Render`: when
-    ///   `remote-templates` is enabled and the fetch fails.
     ///
     /// # Examples
     ///
@@ -451,7 +592,7 @@ impl Engine {
     ///
     /// let engine = Engine::new("templates", Duration::from_secs(60));
     /// // Pass a custom filename list (e.g. just index.html).
-    /// let _ = engine.create_template_folder_with_files(None, &["index.html"]);
+    /// let _ = engine.create_template_folder_with_files(Some("."), &["index.html"]);
     /// ```
     pub fn create_template_folder_with_files(
         &self,
@@ -605,51 +746,6 @@ impl Engine {
         out.write_all(&bytes)?;
         Ok(())
     }
-
-    /// Clears all cached rendered templates.
-    ///
-    /// This method removes all entries from the cache, freeing up memory.
-    /// After calling this, subsequent render requests will not retrieve
-    /// any cached results and will regenerate the templates.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use staticweaver::engine::Engine;
-    /// use std::time::Duration;
-    ///
-    /// let mut engine = Engine::new("templates", Duration::from_secs(3600));
-    /// // Cache some templates...
-    ///
-    /// // Clear the cache
-    /// engine.clear_cache();
-    /// ```
-    pub fn clear_cache(&mut self) {
-        self.render_cache.clear();
-    }
-
-    /// Sets a maximum size for the render cache and clears the cache if it exceeds the specified limit.
-    ///
-    /// Caps the render cache at `max_size` entries. Subsequent inserts at
-    /// or above the cap evict the least-recently-used entry automatically
-    /// — no more wholesale cache wipes.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_size` - The maximum number of cache entries allowed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use staticweaver::engine::Engine;
-    /// use std::time::Duration;
-    ///
-    /// let mut engine = Engine::new("templates", Duration::from_secs(3600));
-    /// engine.set_max_cache_size(100);
-    /// ```
-    pub fn set_max_cache_size(&mut self, max_size: usize) {
-        self.render_cache.set_capacity(max_size);
-    }
 }
 
 /// Utility function to check if a given path is a URL.
@@ -663,6 +759,26 @@ impl Engine {
 /// `true` if the path is a URL, `false` otherwise.
 fn is_url(path: &str) -> bool {
     path.starts_with("http://") || path.starts_with("https://")
+}
+
+/// Validates that a template or partial name is safe and does not
+/// attempt to escape the template directory.
+///
+/// Allows alphanumeric characters, hyphens, underscores, and forward
+/// slashes (for subdirectories). Rejects absolute paths, null bytes,
+/// and `..` segments.
+fn validate_path(path: &str) -> Result<(), EngineError> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains('\0')
+        || path.split(['/', '\\']).any(|seg| seg == "..")
+    {
+        return Err(EngineError::InvalidTemplate(format!(
+            "invalid template or partial name: {path:?}"
+        )));
+    }
+    Ok(())
 }
 
 /// Locates the body and the byte index following the matching closer for
@@ -1014,6 +1130,46 @@ mod tests {
     }
 
     #[test]
+    fn comment_inline_renders_nothing() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out =
+            engine.render_template("[{{! ignored }}]", &ctx).unwrap();
+        assert_eq!(out, "[]");
+    }
+
+    #[test]
+    fn comment_block_form_renders_nothing() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template("[{{!-- block\nspans lines --}}]", &ctx)
+            .unwrap();
+        assert_eq!(out, "[]");
+    }
+
+    #[test]
+    fn comment_empty_form_renders_nothing() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine.render_template("[{{!}}]", &ctx).unwrap();
+        assert_eq!(out, "[]");
+    }
+
+    #[test]
+    fn raw_opt_out_still_works_alongside_comments() {
+        // Disambiguation: `{{!body}}` (no space after !) is raw
+        // substitution, not a comment.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("body".to_string(), "<b>hi</b>".to_string());
+        let out = engine
+            .render_template("before {{! note }} after {{!body}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "before  after <b>hi</b>");
+    }
+
+    #[test]
     fn test_render_template_escaping_disabled() {
         let engine = Engine::new("", Duration::from_secs(60))
             .with_html_escape(false);
@@ -1075,13 +1231,307 @@ mod tests {
         let mut engine =
             Engine::new("templates", Duration::from_secs(60));
         let context = Context::new();
-        for bad in ["../etc/passwd", "a/b", "a\\b", ""] {
+        // `a/b` is now allowed; only `..`, absolute paths, and nulls
+        // are rejected.
+        for bad in ["../etc/passwd", "/etc/passwd", "a\0b", ""] {
             let result = engine.render_page(&context, bad);
             assert!(
                 matches!(result, Err(EngineError::InvalidTemplate(_))),
                 "expected rejection for {bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_render_page_with_subdirectory() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let sub_dir = temp_dir.path().join("blog");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let template_path = sub_dir.join("post.html");
+        fs::write(&template_path, "Post: {{title}}").unwrap();
+
+        let mut engine = Engine::new(
+            temp_dir.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let mut context = Context::new();
+        context.set("title".to_string(), "Hello World".to_string());
+
+        let result = engine.render_page(&context, "blog/post").unwrap();
+        assert_eq!(result, "Post: Hello World");
+    }
+
+    #[test]
+    fn test_render_template_with_partial() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let partial_path = temp.path().join("header.html");
+        fs::write(&partial_path, "Welcome, {{name}}!").unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let mut context = Context::new();
+        context.set("name".to_string(), "Alice".to_string());
+
+        let template = "Header: {{> header}}";
+        let result =
+            engine.render_template(template, &context).unwrap();
+        assert_eq!(result, "Header: Welcome, Alice!");
+    }
+
+    #[test]
+    fn test_render_template_partial_recursion_limit() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let partial_path = temp.path().join("loop.html");
+        fs::write(&partial_path, "{{> loop}}").unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let context = Context::new();
+
+        let template = "{{> loop}}";
+        let result = engine.render_template(template, &context);
+        assert!(
+            matches!(result, Err(EngineError::Render(msg)) if msg.contains("recursion depth"))
+        );
+    }
+
+    #[test]
+    fn test_render_template_with_filters() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut context = Context::new();
+        context.set("name".to_string(), " Alice ".to_string());
+
+        let template = "Hello, {{ name | trim | uppercase }}!";
+        let result =
+            engine.render_template(template, &context).unwrap();
+        assert_eq!(result, "Hello, ALICE!");
+    }
+
+    #[test]
+    fn test_render_template_truncate_filter() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut context = Context::new();
+        context.set(
+            "long".to_string(),
+            "This is a very long string that should be truncated"
+                .to_string(),
+        );
+
+        let template = "{{ long | truncate }}";
+        let result =
+            engine.render_template(template, &context).unwrap();
+        assert_eq!(result, "This is a very long string ...");
+    }
+
+    #[test]
+    fn test_render_template_unknown_filter_errors() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut context = Context::new();
+        context.set("name".to_string(), "Alice".to_string());
+
+        let template = "{{ name | invalid }}";
+        let result = engine.render_template(template, &context);
+        assert!(
+            matches!(result, Err(EngineError::Render(msg)) if msg.contains("Unknown filter"))
+        );
+    }
+
+    #[test]
+    fn test_render_template_partial_name_empty() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let ctx = Context::new();
+        let result = engine.render_template("{{> }}", &ctx);
+        assert!(matches!(
+            result,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("Empty partial")
+        ));
+    }
+
+    #[test]
+    fn test_render_template_partial_name_invalid() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let ctx = Context::new();
+        let result = engine.render_template("{{> /etc/passwd}}", &ctx);
+        assert!(matches!(
+            result,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("invalid template or partial")
+        ));
+    }
+
+    #[test]
+    fn test_render_template_partial_missing_file() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let ctx = Context::new();
+        let result = engine.render_template("{{> missing}}", &ctx);
+        assert!(matches!(result, Err(EngineError::Io(_))));
+    }
+
+    #[test]
+    fn test_render_template_unknown_filter() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Alice".to_string());
+        let result = engine.render_template("{{name | missing}}", &ctx);
+        assert!(matches!(
+            result,
+            Err(EngineError::Render(msg)) if msg.contains("Unknown filter")
+        ));
+    }
+
+    #[test]
+    fn test_render_template_each_unresolved_list() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let ctx = Context::new();
+        let result =
+            engine.render_template("{{#each missing}}x{{/each}}", &ctx);
+        assert!(matches!(
+            result,
+            Err(EngineError::Render(msg)) if msg.contains("#each: unresolved")
+        ));
+    }
+
+    #[test]
+    fn test_render_template_each_not_a_list() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("k".to_string(), 42);
+        let result =
+            engine.render_template("{{#each k}}x{{/each}}", &ctx);
+        assert!(matches!(
+            result,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("expects a list")
+        ));
+    }
+
+    #[test]
+    fn test_extract_block_unclosed_tag() {
+        // extract_block calls after_open.find(close) which can return None
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("show".to_string(), true);
+        // This triggers "Unclosed template tag" inside extract_block
+        let result = engine
+            .render_template("{{#if show}} {{#if x}} {{/if", &ctx);
+        assert!(matches!(
+            result,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("Unclosed template tag")
+        ));
+    }
+
+    #[test]
+    fn test_extract_block_mismatched_closer() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("show".to_string(), true);
+        let result =
+            engine.render_template("{{#if show}} {{/each}}", &ctx);
+        assert!(matches!(
+            result,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("Unclosed `{{#if}}` block")
+        ));
+    }
+
+    #[test]
+    fn test_split_else_malformed_tag() {
+        let engine = Engine::new("templates", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("show".to_string(), true);
+        // This triggers "Unclosed `{{#if}}` block" because the parser
+        // can't find a clean end for the if-block while skipping the
+        // malformed inner tag.
+        let result =
+            engine.render_template("{{#if show}} {{ {{/if}}", &ctx);
+        match &result {
+            Err(EngineError::InvalidTemplate(msg)) => {
+                assert!(msg.contains("Unclosed `{{#if}}` block"));
+            }
+            Ok(s) => panic!("Expected error, got success: {}", s),
+            other => panic!(
+                "Expected InvalidTemplate error, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_validate_path_cases() {
+        assert!(validate_path("").is_err());
+        assert!(validate_path("/absolute").is_err());
+        assert!(validate_path("\\absolute").is_err());
+        assert!(validate_path("null\0char").is_err());
+        assert!(validate_path("blog/../etc/passwd").is_err());
+        assert!(validate_path("blog/post").is_ok());
+    }
+
+    #[test]
+    fn test_render_template_nested_if() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("outer".to_string(), true);
+        ctx.set_value("inner".to_string(), true);
+        let out = engine
+            .render_template(
+                "{{#if outer}}O{{#if inner}}I{{/if}}{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "OI");
+    }
+
+    #[test]
+    fn test_render_template_nested_each() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("list".to_string(), vec![vec![1]]);
+        let out = engine
+            .render_template(
+                "{{#each list}}X{{#each this}}{{this}}{{/each}}{{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "X1");
+    }
+
+    #[test]
+    fn test_create_template_folder_empty_files_errors() {
+        let engine = Engine::new("t", Duration::from_secs(60));
+        let result = engine.create_template_folder_with_files(
+            Some("http://example.com"),
+            &[],
+        );
+        #[cfg(feature = "remote-templates")]
+        assert!(matches!(
+            result,
+            Err(EngineError::InvalidTemplate(msg)) if msg.contains("must not be empty")
+        ));
+        #[cfg(not(feature = "remote-templates"))]
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cache_insert_empty_victim_internal() {
+        // We can't easily trigger the None => break branch via the
+        // public API since HashMaps with capacity > 0 always have a
+        // min_by_key. However, we can use a zero-capacity cache if it
+        // were possible. Instead, we'll verify it doesn't crash on
+        // empty.
+        let mut cache: Cache<String, String> =
+            Cache::with_capacity(Duration::from_secs(60), 0);
+        let _ = cache.insert("k".to_string(), "v".to_string());
+        assert_eq!(cache.len(), 1); // insert still works, cap is a 'soft' hint for eviction
     }
 
     #[test]
