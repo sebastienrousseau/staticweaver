@@ -445,22 +445,42 @@ impl Engine {
             }
 
             // ── Partial inclusion ──────────────────────────────────
-            if let Some(name) = key_trimmed.strip_prefix('>') {
-                let name = name.trim();
+            // `{{> name}}`               include with current context
+            // `{{> name k="v" n=7 }}`    include with overridden bindings
+            //
+            // `k=v` pairs are layered onto a clone of the parent context
+            // so callers can pass overrides without polluting the
+            // surrounding scope. Values may be quoted strings (single or
+            // double), bare integers, or `true`/`false`/`null`.
+            if let Some(after_arrow) = key_trimmed.strip_prefix('>') {
+                let (name, params_str) =
+                    split_partial_invocation(after_arrow.trim());
                 if name.is_empty() {
                     return Err(EngineError::InvalidTemplate(
                         "Empty partial name".to_string(),
                     ));
                 }
-                // Reject names that could escape the template directory
                 validate_path(name)?;
 
                 let partial_path = Path::new(&self.template_path)
                     .join(format!("{name}.html"));
                 let content = fs::read_to_string(&partial_path)?;
+
+                let render_ctx;
+                let ctx_ref = if params_str.is_empty() {
+                    context
+                } else {
+                    let mut child = context.clone();
+                    for (k, v) in parse_partial_params(params_str)? {
+                        child.set_value(k, v);
+                    }
+                    render_ctx = child;
+                    &render_ctx
+                };
+
                 self.render_recursive(
                     &content,
-                    context,
+                    ctx_ref,
                     output,
                     depth + 1,
                 )?;
@@ -524,8 +544,9 @@ impl Engine {
             // A trailing `safe` filter marks the value as already-safe
             // HTML and suppresses the engine's auto-escape. Mirrors the
             // `{{!key}}` raw opt-out but composes inside a filter chain.
-            let marked_safe =
-                filters.last().is_some_and(|(name, _)| name == "safe");
+            let marked_safe = filters
+                .last()
+                .map_or(false, |(name, _)| name == "safe");
 
             for (name, args) in &filters {
                 rendered = apply_filter(name, args, rendered)?;
@@ -1044,6 +1065,108 @@ fn url_encode(input: &str) -> String {
         }
     }
     out
+}
+
+/// Splits a partial invocation at the first whitespace, separating the
+/// partial name from its `k=v` parameter list. `name` is everything up
+/// to the first space; `params` is everything after, trimmed.
+///
+///   "footer"            -> ("footer", "")
+///   "footer year=2026"  -> ("footer", "year=2026")
+fn split_partial_invocation(s: &str) -> (&str, &str) {
+    match s.find(char::is_whitespace) {
+        Some(i) => (&s[..i], s[i..].trim()),
+        None => (s, ""),
+    }
+}
+
+/// Parses a `k=v k2="v 2" k3=42 k4=true` parameter list into a vector of
+/// `(name, Value)` pairs. Values may be:
+///
+///   - quoted strings: `"…"` or `'…'` (preserve embedded spaces)
+///   - integer literals: `42`, `-7`
+///   - booleans: `true`, `false`
+///   - null: `null`
+///   - bare identifiers: treated as literal strings
+///
+/// Whitespace separates pairs; unbalanced quotes return an
+/// `InvalidTemplate` error.
+fn parse_partial_params(
+    s: &str,
+) -> Result<Vec<(String, crate::context::Value)>, EngineError> {
+    let mut out = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            let _ = chars.next();
+            continue;
+        }
+        // Read key up to '='
+        let mut key = String::new();
+        while let Some(&c) = chars.peek() {
+            if c == '=' || c.is_whitespace() {
+                break;
+            }
+            key.push(c);
+            let _ = chars.next();
+        }
+        if key.is_empty() {
+            return Err(EngineError::InvalidTemplate(
+                "partial param: empty key".to_string(),
+            ));
+        }
+        if chars.next() != Some('=') {
+            return Err(EngineError::InvalidTemplate(format!(
+                "partial param `{key}` missing `=value`"
+            )));
+        }
+        // Read value: quoted run, or whitespace-terminated bareword.
+        let mut value = String::new();
+        match chars.peek() {
+            Some(&q @ ('"' | '\'')) => {
+                let _ = chars.next();
+                let mut closed = false;
+                for c in chars.by_ref() {
+                    if c == q {
+                        closed = true;
+                        break;
+                    }
+                    value.push(c);
+                }
+                if !closed {
+                    return Err(EngineError::InvalidTemplate(format!(
+                        "partial param `{key}` has unclosed quote"
+                    )));
+                }
+                out.push((key, crate::context::Value::String(value)));
+            }
+            Some(_) => {
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() {
+                        break;
+                    }
+                    value.push(c);
+                    let _ = chars.next();
+                }
+                let parsed = match value.as_str() {
+                    "true" => crate::context::Value::Bool(true),
+                    "false" => crate::context::Value::Bool(false),
+                    "null" => crate::context::Value::Null,
+                    _ => match value.parse::<i64>() {
+                        Ok(n) => crate::context::Value::Number(n),
+                        Err(_) => crate::context::Value::String(value),
+                    },
+                };
+                out.push((key, parsed));
+            }
+            None => {
+                return Err(EngineError::InvalidTemplate(format!(
+                    "partial param `{key}` missing value"
+                )));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Parses whitespace-control dashes off a (whitespace-trimmed) tag inner.
@@ -1611,6 +1734,98 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, "color=blue size=M ");
+    }
+
+    #[test]
+    fn partial_with_named_params_overrides_context() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("badge.html"),
+            "{{label}}={{value}}",
+        )
+        .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set("label".to_string(), "outer".to_string());
+
+        // The partial sees label="version", value=42 — outer.label
+        // is shadowed only inside this invocation.
+        let out = engine
+            .render_template(
+                r#"{{> badge label="version" value=42}} {{label}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "version=42 outer");
+    }
+
+    #[test]
+    fn partial_param_handles_quoted_string_with_spaces() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("greet.html"), "Hello, {{name}}!")
+            .unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine
+            .render_template(r#"{{> greet name="Ada Lovelace"}}"#, &ctx)
+            .unwrap();
+        assert_eq!(out, "Hello, Ada Lovelace!");
+    }
+
+    #[test]
+    fn partial_param_unclosed_quote_errors() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("p.html"), "x").unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let err = engine
+            .render_template(r#"{{> p name="open}}"#, &ctx)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::InvalidTemplate(msg) if msg.contains("unclosed quote"),
+        ));
+    }
+
+    #[test]
+    fn partial_param_recognises_booleans_and_null() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("flags.html"),
+            "{{#if active}}A{{else}}-{{/if}} {{count}}",
+        )
+        .unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine
+            .render_template("{{> flags active=true count=3}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "A 3");
     }
 
     #[test]
