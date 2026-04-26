@@ -335,8 +335,18 @@ impl Engine {
         let open = self.open_delim.as_str();
         let close = self.close_delim.as_str();
         let mut rest = template;
+        // Local scope for `{{#set k = v}}`. Materialised lazily on the
+        // first set; subsequent lookups in this scope read from `local`
+        // (rebound below as `active`). Recursive descent into `#if` /
+        // `#each` / `#block` / partial bodies inherits whatever the
+        // caller's scope had at that moment.
+        let mut local: Option<Context> = None;
 
         while let Some(start) = rest.find(open) {
+            // Active context for this iteration: the local scope if any
+            // `#set` has happened at this level, otherwise the parent.
+            let active: &Context = local.as_ref().unwrap_or(context);
+
             // Count the run of backslashes immediately preceding `start`.
             // An odd count leaves one backslash active -> the delimiter
             // is escaped (emitted literally, no tag lookup). An even
@@ -416,7 +426,7 @@ impl Engine {
                     extract_block(after_tag, "if", open, close)?;
                 let (then_body, else_body) =
                     split_else(body, open, close);
-                let cond = context
+                let cond = active
                     .get_path(arg)
                     .map_or(false, |v| v.is_truthy());
                 let chosen = if cond {
@@ -427,7 +437,7 @@ impl Engine {
                 if !chosen.is_empty() {
                     self.render_recursive(
                         chosen,
-                        context,
+                        active,
                         blocks,
                         output,
                         depth + 1,
@@ -441,12 +451,11 @@ impl Engine {
                 let arg = arg.trim();
                 let (body, after_block) =
                     extract_block(after_tag, "each", open, close)?;
-                let target =
-                    context.get_path(arg).ok_or_else(|| {
-                        EngineError::Render(format!(
-                            "#each: unresolved list `{arg}`"
-                        ))
-                    })?;
+                let target = active.get_path(arg).ok_or_else(|| {
+                    EngineError::Render(format!(
+                        "#each: unresolved list `{arg}`"
+                    ))
+                })?;
                 // Iterate Lists by position (binds @index/@first/@last)
                 // and Maps by key (also binds @key). Sort Map entries by
                 // key so iteration order is deterministic across runs —
@@ -479,7 +488,7 @@ impl Engine {
                 for (index, (key_opt, item)) in
                     entries.iter().enumerate()
                 {
-                    let mut child = context.clone();
+                    let mut child = active.clone();
                     child
                         .set_value("this".to_string(), (*item).clone());
                     child.set_value(
@@ -503,6 +512,27 @@ impl Engine {
                     )?;
                 }
                 rest = after_block;
+                continue;
+            }
+
+            // ── Variable assignment ────────────────────────────────
+            // `{{#set name = literal}}` binds `name` in a local scope
+            // visible to subsequent tags at this depth (and to any
+            // recursive descent into block bodies, partials, etc.).
+            // The parent context is not mutated.
+            //
+            // Literals: quoted strings, integers, `true`/`false`/`null`,
+            // or barewords (treated as a literal string).
+            if let Some(rest_set) = key_trimmed.strip_prefix("#set") {
+                let (name, value) =
+                    parse_set_assignment(rest_set.trim())?;
+                if local.is_none() {
+                    local = Some(active.clone());
+                }
+                if let Some(ctx) = local.as_mut() {
+                    ctx.set_value(name, value);
+                }
+                rest = after_tag;
                 continue;
             }
 
@@ -558,9 +588,9 @@ impl Engine {
 
                 let render_ctx;
                 let ctx_ref = if params_str.is_empty() {
-                    context
+                    active
                 } else {
-                    let mut child = context.clone();
+                    let mut child = active.clone();
                     for (k, v) in parse_partial_params(params_str)? {
                         child.set_value(k, v);
                     }
@@ -625,7 +655,7 @@ impl Engine {
                 .filter(|(name, _)| !name.is_empty())
                 .collect();
 
-            let value = context.get_path(lookup).ok_or_else(|| {
+            let value = active.get_path(lookup).ok_or_else(|| {
                 EngineError::Render(format!(
                     "Unresolved template tag: {lookup}"
                 ))
@@ -1161,6 +1191,59 @@ fn url_encode(input: &str) -> String {
         }
     }
     out
+}
+
+/// Parses a `name = literal` assignment used by `{{#set}}`. The literal
+/// follows the same grammar as a partial parameter value: quoted string,
+/// integer, bool, null, or bareword (treated as a literal string).
+fn parse_set_assignment(
+    s: &str,
+) -> Result<(String, crate::context::Value), EngineError> {
+    let s = s.trim();
+    let eq = s.find('=').ok_or_else(|| {
+        EngineError::InvalidTemplate(
+            "#set: missing `= value`".to_string(),
+        )
+    })?;
+    let name = s[..eq].trim().to_string();
+    if name.is_empty() {
+        return Err(EngineError::InvalidTemplate(
+            "#set: empty name".to_string(),
+        ));
+    }
+    let value_str = s[eq + 1..].trim();
+    if value_str.is_empty() {
+        return Err(EngineError::InvalidTemplate(format!(
+            "#set `{name}`: missing value"
+        )));
+    }
+    Ok((name, parse_literal_value(value_str)))
+}
+
+/// Recognises a literal token: `"quoted"` / `'quoted'` strings,
+/// `true`/`false`, `null`, integers, and bareword fallback (string).
+fn parse_literal_value(s: &str) -> crate::context::Value {
+    let bytes = s.as_bytes();
+    if s.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[s.len() - 1];
+        if (first == b'"' && last == b'"')
+            || (first == b'\'' && last == b'\'')
+        {
+            return crate::context::Value::String(
+                s[1..s.len() - 1].to_string(),
+            );
+        }
+    }
+    match s {
+        "true" => crate::context::Value::Bool(true),
+        "false" => crate::context::Value::Bool(false),
+        "null" => crate::context::Value::Null,
+        _ => match s.parse::<i64>() {
+            Ok(n) => crate::context::Value::Number(n),
+            Err(_) => crate::context::Value::String(s.to_string()),
+        },
+    }
 }
 
 /// Strips matching single or double quotes from a name token. Returns
@@ -1921,6 +2004,115 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, "color=blue size=M ");
+    }
+
+    #[test]
+    fn set_binds_string_literal_for_subsequent_tags() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                r#"{{#set name = "Ada"}}Hello, {{name}}!"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "Hello, Ada!");
+    }
+
+    #[test]
+    fn set_binds_integer_bool_and_null_literals() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#set n = 42}}{{#set ok = true}}{{#set z = null}}\
+                 n={{n}} ok={{ok}} z={{z}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "n=42 ok=true z=");
+    }
+
+    #[test]
+    fn set_does_not_mutate_caller_context() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "outer".to_string());
+
+        let _ = engine
+            .render_template(r#"{{#set name = "inner"}}{{name}}"#, &ctx)
+            .unwrap();
+
+        // Caller's context is unchanged after rendering.
+        assert_eq!(ctx.get("name"), Some(&"outer".to_string()),);
+    }
+
+    #[test]
+    fn set_in_each_body_does_not_leak_across_iterations() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b", "c"]);
+        // Each iteration starts fresh — `marker` is set inside the body
+        // but the parent context never sees it after the loop.
+        let out = engine
+            .render_template(
+                r#"{{#each items}}{{#set marker = "X"}}{{this}}={{marker}} {{/each}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "a=X b=X c=X ");
+    }
+
+    #[test]
+    fn set_visible_inside_subsequent_if_block() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#set ready = true}}{{#if ready}}go{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "go");
+    }
+
+    #[test]
+    fn set_supports_dot_notation_on_left_side() {
+        // `#set` only takes a flat key — dot-notation lookups still
+        // work because the bound key matches verbatim.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                r#"{{#set greeting = "hi"}}{{greeting}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "hi");
+    }
+
+    #[test]
+    fn set_missing_value_errors() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err =
+            engine.render_template("{{#set x =}}", &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::InvalidTemplate(msg) if msg.contains("missing value"),
+        ));
+    }
+
+    #[test]
+    fn set_missing_equals_errors() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err =
+            engine.render_template("{{#set x}}", &ctx).unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::InvalidTemplate(msg) if msg.contains("`= value`"),
+        ));
     }
 
     #[test]
