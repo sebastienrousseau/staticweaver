@@ -1,6 +1,40 @@
 // Copyright © 2024 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! # Cache Module
+//!
+//! Generic time-bounded cache used by the engine for `render_page`
+//! results. Two policies stack:
+//!
+//! - **TTL expiration** — every entry carries a per-insert deadline.
+//!   `Cache::get` returns `None` once the deadline has passed; call
+//!   `Cache::remove_expired` periodically to reclaim memory.
+//! - **LRU eviction** — when constructed with `Cache::with_capacity`,
+//!   the cache enforces a hard upper bound. Inserts that would exceed
+//!   the cap evict the least-recently-used entry. `Cache::get` bumps
+//!   access recency, so frequently-read entries stay hot.
+//!
+//! The type is generic over both key and value (`Cache<K, V>`); the
+//! engine instantiates it as `Cache<String, String>` to cache
+//! rendered page bodies.
+//!
+//! # Examples
+//!
+//! ```
+//! use staticweaver::cache::Cache;
+//! use std::time::Duration;
+//!
+//! let mut cache: Cache<String, u32> =
+//!     Cache::with_capacity(Duration::from_secs(60), 2);
+//! let _ = cache.insert("a".to_string(), 1);
+//! let _ = cache.insert("b".to_string(), 2);
+//! // Touching `a` promotes it; the next insert evicts `b`, not `a`.
+//! let _ = cache.get(&"a".to_string());
+//! let _ = cache.insert("c".to_string(), 3);
+//! assert!(cache.contains_key(&"a".to_string()));
+//! assert!(!cache.contains_key(&"b".to_string()));
+//! ```
+
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};

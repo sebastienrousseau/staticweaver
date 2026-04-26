@@ -3,8 +3,67 @@
 
 //! # Engine Module
 //!
-//! This module provides the core functionality for the StaticWeaver templating engine.
-//! It contains the `Engine` struct for rendering templates against a `Context`.
+//! The template rendering engine. The [`Engine`] struct holds the
+//! template root directory, the render cache, and the active delimiter
+//! pair, and exposes [`Engine::render_template`] (string-in, string-out)
+//! and [`Engine::render_page`] (read a `.html` layout from disk).
+//!
+//! ## Templating language
+//!
+//! - **Substitution**: `{{key}}` looks up a `Context` value and emits
+//!   it. Default behaviour HTML-escapes `& < > " '`. Use `{{!key}}` to
+//!   emit the value verbatim, or
+//!   [`Engine::with_html_escape(false)`](Engine::with_html_escape) to
+//!   disable escape globally.
+//! - **Dot-notation**: `{{user.email}}` walks a [`Value::Map`](crate::context::Value);
+//!   `{{items.0}}` indexes a [`Value::List`](crate::context::Value).
+//! - **Control flow**: `{{#if EXPR}}…{{else}}…{{/if}}` and
+//!   `{{#each list}}…{{/each}}`. Each-blocks expose the loop helpers
+//!   `@index`, `@first`, `@last`, and (for `Map` iteration) `@key`,
+//!   binding each element to `this`.
+//! - **Expressions** (inside `#if`): comparisons (`==`, `!=`, `<`,
+//!   `<=`, `>`, `>=`), short-circuiting boolean operators (`and`,
+//!   `or`, `not`), checked integer math (`+`, `-`, `*`, `/`), and
+//!   postfix tests (`is defined`, `is empty`, `is none`) with
+//!   `is not` for negation. Precedence: postfix tests bind tightest,
+//!   then math, comparisons, `not`, `and`, `or`. Bare paths like
+//!   `{{#if user}}` keep their truthiness semantics.
+//! - **Partials**: `{{> name}}` reads `name.html` from
+//!   `template_path` and substitutes the parent context. Pass scoped
+//!   parameters via `{{> name k=v}}`. Recursion is capped at depth 10.
+//! - **Inheritance**: `{{#extends "base"}}` plus
+//!   `{{#block "name"}}…{{/block}}` lets a child template override
+//!   named blocks in its parent. Multi-level chains compose; the
+//!   child wins on conflicting block names.
+//! - **In-template assignment**: `{{#set name = LITERAL}}` binds a
+//!   value locally for subsequent tags. Local-scope only — does not
+//!   leak into the parent context.
+//! - **Filters**: `{{ x | filter }}`, with arguments via
+//!   `{{ x | filter:arg }}`. Built-in filters: `uppercase`,
+//!   `lowercase`, `trim`, `truncate`, `capitalize`, `length`,
+//!   `default`, `replace`, `urlencode`, `safe`.
+//! - **Comments**: `{{! one-line }}` and `{{!-- multi-line --}}` are
+//!   stripped before rendering.
+//! - **Whitespace control**: `{{- key -}}` trims adjacent whitespace
+//!   on the corresponding side of the tag.
+//! - **Backslash escape**: `\{{literal}}` emits `{{literal}}`
+//!   verbatim. Even runs collapse to literal backslashes, odd runs
+//!   escape the following delimiter.
+//! - **Custom delimiters**:
+//!   [`Engine::set_delimiters("<<", ">>")`](Engine::set_delimiters)
+//!   swaps `{{` / `}}` for any pair.
+//!
+//! ## Caching
+//!
+//! [`Engine::render_page`] caches results keyed by
+//! `"{layout}:{Context::hash()}"`. The cache uses true LRU eviction
+//! when bounded — see [`crate::cache`].
+//!
+//! ## Errors
+//!
+//! Both render entry points return `Result<String, EngineError>`.
+//! Missing keys produce `EngineError::Render`; malformed templates
+//! produce `EngineError::InvalidTemplate`. See [`crate::error`].
 
 use crate::cache::Cache;
 use crate::context::Context;

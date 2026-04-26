@@ -451,7 +451,15 @@ Run `make` with no target to see the full list.
 | `ci.yml` | push, PR | Clippy, fmt, test (Linux + macOS + Windows), coverage gate (95%), `cargo deny`, via reusable pipelines |
 | `release.yml` | tag `v*.*.*` | Validate matrix (macOS + Linux + Windows), build artifacts, GitHub Release, crates.io publish |
 
-API docs are published continuously by [docs.rs](https://docs.rs/staticweaver) — there is no separate documentation workflow.
+### Documentation
+
+| Surface | Hosted at | Built by | Trigger |
+| :--- | :--- | :--- | :--- |
+| API reference | [docs.rs/staticweaver](https://docs.rs/staticweaver) | docs.rs | `crates.io` publish |
+| README + crate-level prose | [docs.rs/staticweaver](https://docs.rs/staticweaver) (front page) | `#![doc = include_str!("../README.md")]` in `src/lib.rs` | every `cargo doc` |
+| CHANGELOG / SECURITY / FAQ | This GitHub repo | — | every push |
+
+The CI `docs` job builds documentation under `RUSTDOCFLAGS="-D warnings -D rustdoc::broken_intra_doc_links"`, runs every doctest with `--all-features`, and enforces 100% example coverage via `cargo +nightly rustdoc -- -Z unstable-options --show-coverage`. Publication itself is handled by docs.rs on every crates.io release — there is no `gh-pages` branch and no separate documentation workflow.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 
