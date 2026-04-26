@@ -7,7 +7,7 @@
 <h1 align="center">StaticWeaver</h1>
 
 <p align="center">
-  <strong>Small, safe, cacheable. A templating engine for Rust that escapes HTML by default.</strong>
+  <strong>Small, safe, cacheable. Mustache-compatible syntax, Tera-style expressions and inheritance, zero <code>unsafe</code> code.</strong>
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
   <a href="https://crates.io/crates/staticweaver"><img src="https://img.shields.io/crates/v/staticweaver.svg?style=for-the-badge&color=fc8d62&logo=rust" alt="Crates.io" /></a>
   <a href="https://docs.rs/staticweaver"><img src="https://img.shields.io/badge/docs.rs-staticweaver-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" alt="Docs.rs" /></a>
   <a href="https://codecov.io/gh/sebastienrousseau/staticweaver"><img src="https://img.shields.io/codecov/c/github/sebastienrousseau/staticweaver?style=for-the-badge&logo=codecov" alt="Coverage" /></a>
-  <a href="https://lib.rs/crates/staticweaver"><img src="https://img.shields.io/badge/lib.rs-v0.0.2-orange.svg?style=for-the-badge" alt="lib.rs" /></a>
+  <a href="https://lib.rs/crates/staticweaver"><img src="https://img.shields.io/crates/v/staticweaver?style=for-the-badge&label=lib.rs&color=orange" alt="lib.rs" /></a>
 </p>
 
 ---
@@ -25,12 +25,15 @@
 - [Install](#install) -- Cargo, source, MSRV
 - [Quick Start](#quick-start) -- render a template in 10 lines
 - [Overview](#overview) -- what staticweaver does
+- [When to choose staticweaver](#when-to-choose-staticweaver) -- vs Tera, Handlebars, minijinja
+- [Templating Language](#templating-language) -- tags, blocks, filters, expressions
 - [Features](#features) -- capability matrix
 - [Library Usage](#library-usage) -- rendering, escaping, delimiters, caching, remote templates
 - [Configuration](#configuration) -- engine and cache options
-- [Examples](#examples) -- five branded examples
+- [Examples](#examples) -- six runnable examples
 - [Development](#development) -- make targets, CI
 - [Security](#security) -- safety guarantees
+- [FAQ](#faq) -- common questions
 - [License](#license)
 
 ---
@@ -82,21 +85,111 @@ assert_eq!(output, "<h1>My Page</h1><p>Hello, World!</p>");
 
 Use [`Engine::render_page`](https://docs.rs/staticweaver) to render a `.html` file from the template directory instead of a literal string.
 
+**With control flow, dot-notation, and a filter** (the rest of what shipped in `v0.0.2`):
+
+```rust
+use staticweaver::{Context, Engine};
+use std::time::Duration;
+
+let engine = Engine::new("templates", Duration::from_secs(60));
+let mut ctx = Context::new();
+ctx.set_value("title".to_string(), "Posts");
+ctx.set_value("posts".to_string(), vec!["Hello", "World"]);
+
+let template = "\
+<h1>{{ title | uppercase }}</h1>\
+{{#if posts}}\
+<ul>{{#each posts}}<li>{{this}}</li>{{/each}}</ul>\
+{{else}}\
+<p>No posts yet.</p>\
+{{/if}}";
+
+let out = engine.render_template(template, &ctx).unwrap();
+assert_eq!(
+    out,
+    "<h1>POSTS</h1><ul><li>Hello</li><li>World</li></ul>"
+);
+```
+
 ---
 
 ## Overview
 
-StaticWeaver is a small templating engine that substitutes `{{name}}` tags against a `Context` and writes the result back as a `String`. It is designed to be **safe by default, cacheable, and dependency-light**: most templating crates pick one of those — staticweaver picks all three.
+StaticWeaver is a small templating engine for Rust. It substitutes `{{name}}` tags against a `Context`, evaluates control-flow blocks and a small expression language, walks template inheritance chains, and writes the result back as a `String`. It is designed to be **safe by default, cacheable, and dependency-light**: most templating crates pick one of those — staticweaver picks all three.
 
 - **HTML-escaped by default** -- `&<>"'` in context values become entities; `{{!key}}` opts out per tag
+- **Polymorphic context** -- `Value` enum (`Null` / `Bool` / `Number` / `String` / `List` / `Map`) with dot-notation lookup (`{{user.email}}`, `{{items.0}}`)
+- **Control flow** -- `{{#if EXPR}}` / `{{else}}` / `{{/if}}` and `{{#each list}}` with `@index` / `@first` / `@last` / `@key` helpers
+- **Expression language** -- comparisons, boolean operators (`and` / `or` / `not`), integer math, postfix tests (`is defined` / `is empty` / `is none`)
+- **Partials and inheritance** -- `{{> name}}` partials with parameters, and `{{#extends "base"}}` + `{{#block "name"}}` for layout reuse
+- **Filters** -- `{{ x | trim | uppercase }}`, `{{ bio | truncate:140 }}`, with a built-in set covering `uppercase` / `lowercase` / `trim` / `truncate` / `capitalize` / `length` / `default` / `replace` / `urlencode` / `safe`
 - **Path-validated `render_page`** -- rejects `..`, `/`, `\`, null bytes in layout names
 - **`#![forbid(unsafe_code)]`** -- enforced at the crate root
-- **TTL cache** -- generic `Cache<K, V>` with optional capacity bound
+- **LRU cache** -- generic `Cache<K, V>` with optional capacity bound and true LRU eviction on overflow
 - **Custom delimiters** -- swap `{{ }}` for any pair at runtime
 - **Opt-in networking** -- remote template fetch lives behind the `remote-templates` cargo feature
-- **Bounded HTTP** -- remote fetches cap bodies at 1 MiB
+- **Bounded HTTP** -- remote fetches cap bodies at 1 MiB with a 10 s timeout
 - **Pure Rust** -- no C bindings, no FFI, no build script
 - **MSRV 1.68** -- stable Rust only
+
+---
+
+## When to choose staticweaver
+
+| Need | staticweaver | Tera | Handlebars | minijinja |
+| :--- | :---: | :---: | :---: | :---: |
+| `#![forbid(unsafe_code)]` | yes | no | no | no |
+| MSRV 1.68 | yes | newer | newer | newer |
+| HTML-escape by default | yes | yes | yes | yes |
+| Template inheritance | yes | yes | partials only | yes |
+| Built-in filter pipeline | yes | yes | helpers only | yes |
+| Async runtime required | no | no | no | no |
+| Networking in default build | no | no | no | no |
+
+If you need a **full sandboxed expression language with custom tests, async, or i18n**, pick Tera. If you need the **smallest possible substituter with HTML safety, inheritance, and zero `unsafe`**, pick staticweaver.
+
+---
+
+## Templating Language
+
+| Feature | Syntax | Example |
+| :--- | :--- | :--- |
+| Substitution | `{{key}}` | `{{name}}` |
+| Raw (no escape) | `{{!key}}` | `{{!html_blob}}` |
+| Dot-notation | `{{a.b.c}}` | `{{user.email}}` |
+| List index | `{{list.0}}` | `{{tags.0}}` |
+| Comments | `{{! ... }}` / `{{!-- ... --}}` | `{{!-- TODO --}}` |
+| Whitespace control | `{{- key -}}` | strips adjacent whitespace |
+| If / else | `{{#if EXPR}}…{{else}}…{{/if}}` | `{{#if user.admin}}` |
+| Each | `{{#each list}}…{{/each}}` | `{{#each items}}{{this}}{{/each}}` |
+| Each helpers | `@index`, `@first`, `@last`, `@key` | `{{#each users}}{{@index}}: {{this.name}}{{/each}}` |
+| Partials | `{{> name}}` | `{{> header}}` |
+| Partial parameters | `{{> name k=v}}` | `{{> button label="Save"}}` |
+| Inheritance | `{{#extends "base"}}` + `{{#block "x"}}…{{/block}}` | child overrides named blocks |
+| Set | `{{#set x = LITERAL}}` | `{{#set tier = "pro"}}` |
+| Filters | `{{ x \| filter \| filter:arg }}` | `{{ name \| trim \| uppercase }}` |
+| Backslash-escape delimiter | `\{{literal}}` | emits `{{literal}}` verbatim |
+
+### Expression language
+
+The `{{#if EXPR}}` block accepts a small recursive-descent expression language. Precedence: postfix tests bind tightest, then math (`*` / `/` then `+` / `-`), then comparisons, then `not`, `and`, `or`.
+
+| Layer | Operators |
+| :--- | :--- |
+| Comparison | `==`, `!=`, `<`, `<=`, `>`, `>=` |
+| Boolean | `and`, `or`, `not` (short-circuiting) |
+| Math (integer) | `+`, `-`, `*`, `/` (checked; division-by-zero returns `InvalidTemplate`) |
+| Postfix tests | `is defined`, `is empty`, `is none` (negate with `is not`) |
+
+```text
+{{#if user.email is defined and user.email is not empty}}
+  Hi, {{user.name}}!
+{{else}}
+  Welcome, guest.
+{{/if}}
+```
+
+A bare path like `{{#if user}}` keeps its truthiness semantics — it evaluates the lookup and tests `Value::is_truthy`. See [`examples/engine.rs`](examples/engine.rs) for runnable demonstrations.
 
 ---
 
@@ -105,12 +198,17 @@ StaticWeaver is a small templating engine that substitutes `{{name}}` tags again
 | | |
 | :--- | :--- |
 | **Rendering** | `render_template(&str, &Context)` for in-memory strings, `render_page(&Context, layout)` for a `.html` file inside `template_path`. Both return `Result<String, EngineError>`. |
-| **Context** | `Context::set/get/update/remove`, `with_capacity`, `iter`, `clear`, and a stable `hash()` for cache-key construction. Implements `Deref<Target = FnvHashMap<String, String>>` for power users. |
+| **Context** | Polymorphic `Value` enum (`Null` / `Bool` / `Number` / `String` / `List` / `Map`). `set` / `get` for legacy strings; `set_value` / `get_value` for typed inserts (`Into<Value>` for `String`, `&str`, `bool`, `i32`, `i64`, `Vec<V>`); `get_path` for dot-notation walks (`user.email`, `items.0`). `iter`, `clear`, `with_capacity`, and a stable `hash()` for cache-key construction. |
 | **HTML escape** | On by default. Five entities replaced (`& < > " '`). Per-tag opt-out: `{{!body}}`. Global opt-out: `Engine::new(...).with_html_escape(false)`. |
-| **Delimiters** | `set_delimiters(open, close)` swaps `{{` / `}}` for any pair. Whitespace around keys is trimmed (`{{ name }}` == `{{name}}`). |
-| **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. |
-| **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `rustls-tls-native-roots`. The default URL fallback has been removed. |
-| **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). `TemplateError` with `#[from]` conversions for `io::Error`, `reqwest::Error`, and boxed `EngineError`. |
+| **Control flow** | `{{#if EXPR}}…{{else}}…{{/if}}` and `{{#each list}}…{{/each}}` with `@index`, `@first`, `@last`, `@key` loop helpers and `Map` iteration. |
+| **Expressions** | Recursive-descent parser inside `#if`: comparisons (`==` `!=` `<` `<=` `>` `>=`), boolean ops (`and` `or` `not`, short-circuiting), integer math (`+` `-` `*` `/`, checked arithmetic), postfix tests (`is defined`, `is empty`, `is none`, with `is not` negation). |
+| **Partials & inheritance** | `{{> name}}` partials with `{{> name k=v}}` parameters and a depth-10 recursion guard; `{{#extends "base"}}` + `{{#block "name"}}…{{/block}}` for multi-level inheritance, child wins on conflicts. |
+| **Filters** | Pipeline syntax `{{ x | f | g:arg }}`. Built-in: `uppercase`, `lowercase`, `trim`, `truncate`, `capitalize`, `length`, `default`, `replace`, `urlencode`, `safe`. |
+| **In-template assignment** | `{{#set name = LITERAL}}` binds locally without leaking to the parent scope. |
+| **Delimiters** | `set_delimiters(open, close)` swaps `{{` / `}}` for any pair. Whitespace around keys is trimmed (`{{ name }}` == `{{name}}`). Whitespace control via `{{- key -}}`. Backslash-escape via `\{{literal}}`. |
+| **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. **True LRU eviction** on overflow — `Cache::get` (now `&mut self`) bumps access recency. Methods: `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. |
+| **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-tls-native-roots`. The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
+| **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). `TemplateError` with `#[from]` conversions for `io::Error` and `reqwest::Error`. |
 | **`cargo deny`** | `advisories`, `bans`, `licenses`, `sources` all pass. Yanked crates denied. |
 
 ---
@@ -228,9 +326,9 @@ assert!(cache.contains_key(&"greeting".to_string()));
 cache.remove_expired();
 ```
 
-The `Engine::render_page` path caches by `"{layout}:{ctx.hash()}"`. `Context::hash` sorts keys before hashing so equal contexts always produce equal hashes, making the cache hit deterministically rather than thrashing on insertion order.
+The `Engine::render_page` path caches by `"{layout}:{ctx.hash()}"`. `Context::hash` is order-independent (XOR-combined per entry) so equal logical contexts always produce equal hashes, making the cache hit deterministically rather than thrashing on insertion order.
 
-Bounded caches silently drop inserts past the cap (new keys only — updating an existing key always succeeds). Call `set_max_cache_size(n)` on the engine to clear the cache if it grows beyond `n` entries.
+Bounded caches use **true LRU eviction**: when a new key would push the cache past its cap, the least-recently-used entry is evicted. `Cache::get` (now `&mut self`) bumps access recency, so frequently-rendered pages stay hot. Updating an existing key never triggers eviction. `set_max_cache_size(n)` resizes the cap; entries above the new cap are evicted on the next insert.
 
 </details>
 
@@ -280,7 +378,8 @@ let plain = Engine::new("templates", Duration::from_secs(3600))
 // Replace delimiters at any time.
 engine.set_delimiters("<%", "%>");
 
-// Size-bound the render cache: clears the whole cache if it grows past `max`.
+// Size-bound the render cache: capacity-pressure inserts evict the
+// least-recently-used entry.
 engine.set_max_cache_size(1024);
 
 // Or drop everything now.
@@ -316,15 +415,16 @@ Both constructors panic if `ttl` is zero. `Cache::default()` yields a 60 s TTL w
 cargo run --example hello
 ```
 
-All examples live in `examples/` and use the shared `support.rs` helper for the spinner/checkmark UI. Run any of them with `cargo run --example <name>`.
+All examples live in `examples/` and use the shared `support.rs` helper for the spinner/checkmark UI. Run any of them with `cargo run --example <name>`. See [`examples/README.md`](examples/README.md) for an annotated index.
 
 | Example | Covers |
 | :--- | :--- |
 | `hello` | Getting started: build an `Engine`, populate a `Context`, render a template |
-| `context` | Insert, update, remove, iterate; capacity hints; hash stability |
-| `cache` | TTL expiration, capacity bounds, refresh, update, `IntoIterator` |
-| `engine` | Escaping defaults, `{{!key}}` opt-out, `render_page`, custom delimiters, path-traversal rejection |
+| `context` | Insert, update, remove, iterate; typed values; dot-notation; hash stability |
+| `cache` | TTL expiration, **LRU eviction**, refresh, update, `IntoIterator` |
+| `engine` | Escaping defaults, `{{!key}}` opt-out, partials, filters, control flow, dot-notation, `render_page` with subdirectories, custom delimiters, path-traversal rejection |
 | `errors` | Every `EngineError` / `TemplateError` variant and its conversions |
+| `remote` | (feature-gated) `create_template_folder(Some(url))` against a local mock server. Run with `cargo run --example remote --features remote-templates`. |
 
 ---
 
@@ -348,9 +448,10 @@ Run `make` with no target to see the full list.
 
 | Workflow | Trigger | Purpose |
 | :--- | :--- | :--- |
-| `ci.yml` | push, PR | Clippy, fmt, test, coverage, nightly smoke-test via reusable pipelines |
-| `document.yml` | push to main | Build and publish API docs |
-| `release.yml` | tag `v*` | Validate, build artifacts, GitHub Release, crates.io publish |
+| `ci.yml` | push, PR | Clippy, fmt, test (Linux + macOS + Windows), coverage gate (95%), `cargo deny`, via reusable pipelines |
+| `release.yml` | tag `v*.*.*` | Validate matrix (macOS + Linux + Windows), build artifacts, GitHub Release, crates.io publish |
+
+API docs are published continuously by [docs.rs](https://docs.rs/staticweaver) — there is no separate documentation workflow.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 
@@ -371,6 +472,52 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 - Yanked crates denied via `[advisories] yanked = "deny"`
 - All commits GPG-signed; `Assisted-by:` trailer per the Linux kernel coding-assistants convention
 - SPDX license headers on all source files
+
+</details>
+
+---
+
+## FAQ
+
+<details>
+<summary><b>Is staticweaver async?</b></summary>
+
+No. The render path is synchronous. The remote-template downloader (behind the `remote-templates` feature) uses blocking `reqwest`. If you need to fetch templates from inside an async task, call `create_template_folder` from `tokio::task::spawn_blocking`.
+
+</details>
+
+<details>
+<summary><b>Does it support template inheritance?</b></summary>
+
+Yes. `{{#extends "base"}}` plus `{{#block "name"}}…{{/block}}` works with multi-level chains; the child wins on conflicting block names. See the [Templating Language](#templating-language) section.
+
+</details>
+
+<details>
+<summary><b>How is it different from Tera or Handlebars?</b></summary>
+
+`#![forbid(unsafe_code)]`, MSRV 1.68, no networking in the default build, and a small (~700 LoC) recursive-descent expression evaluator that covers comparisons, booleans, integer math, and the `is defined` / `is empty` / `is none` postfix tests. See the [comparison table](#when-to-choose-staticweaver).
+
+</details>
+
+<details>
+<summary><b>Can I use it with Axum or Actix?</b></summary>
+
+Yes — render to a `String`, then return it. There is no framework integration layer because none is needed; the engine is a pure function over `(template, context)`.
+
+</details>
+
+<details>
+<summary><b>How are missing values rendered?</b></summary>
+
+A missing key in `render_template` returns `EngineError::Render`. Inside `{{#if}}`, a missing path evaluates to `Value::Null` (which is falsy). Use `{{#if x is defined}}` to distinguish "missing" from "explicit `Null`".
+
+</details>
+
+<details>
+<summary><b>What is the cache key for `render_page`?</b></summary>
+
+`"{layout}:{Context::hash()}"`. `Context::hash` is order-independent, so two contexts with the same logical contents hit the same cache entry regardless of insertion order.
 
 </details>
 
