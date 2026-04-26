@@ -562,7 +562,22 @@ impl Engine {
                     // after the first iteration — saves one String
                     // allocation per loop variable per iteration
                     // (5 × N for List with @key, 4 × N otherwise).
-                    child.set_value_str("this", (*item).clone());
+                    // For `Value::String` items the dedicated
+                    // set_value_string variant additionally reuses
+                    // the destination String's heap buffer instead
+                    // of cloning, eliminating the per-iter alloc
+                    // for the most common loop-item shape.
+                    match item {
+                        crate::context::Value::String(s) => {
+                            child.set_value_string("this", s);
+                        }
+                        other => {
+                            child.set_value_str(
+                                "this",
+                                (*other).clone(),
+                            );
+                        }
+                    }
                     child.set_value_str(
                         "@index",
                         i64::try_from(index).unwrap_or(i64::MAX),

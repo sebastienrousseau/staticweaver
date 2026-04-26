@@ -375,6 +375,59 @@ impl Context {
     /// ctx.set_value_str("count", 2);
     /// assert_eq!(format!("{:?}", ctx.get_value("count")), "Some(Number(2))");
     /// ```
+    /// Borrowed-string variant of [`Context::set_value_str`] for
+    /// `Value::String` entries. When the existing slot is already a
+    /// `Value::String`, this clears its buffer and pushes the new bytes
+    /// in place, *reusing the heap allocation* instead of building a
+    /// fresh `String`. For tight loops that set the same string-keyed
+    /// slot repeatedly (most notably `#each` binding `this` to a
+    /// `Value::String` item on every iteration) this saves one heap
+    /// allocation per call after the first. Type changes (slot was a
+    /// `Number`/`Bool`/etc) fall through to a full overwrite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let mut ctx = Context::new();
+    /// ctx.set_value_string("greeting", "Hello");
+    /// ctx.set_value_string("greeting", "Hi"); // reuses the buffer
+    /// ```
+    pub fn set_value_string(&mut self, key: &str, value: &str) {
+        match self.elements.get_mut(key) {
+            Some(Value::String(dst)) => {
+                dst.clear();
+                dst.push_str(value);
+            }
+            Some(slot) => *slot = Value::String(value.to_string()),
+            None => {
+                let _ = self.elements.insert(
+                    key.to_string(),
+                    Value::String(value.to_string()),
+                );
+            }
+        }
+    }
+
+    /// Borrowed-key counterpart to [`Context::set_value`]. Allocates a
+    /// new `String` for the key only when no entry with that key
+    /// exists; on update the existing key is reused and only the value
+    /// slot is overwritten. Use this in tight loops where the same key
+    /// is set repeatedly — the `#each` iterator helpers (`this`,
+    /// `@index`, `@first`, `@last`, `@key`) are the canonical case.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let mut ctx = Context::new();
+    /// // First call allocates the key; second only overwrites the value.
+    /// ctx.set_value_str("count", 1);
+    /// ctx.set_value_str("count", 2);
+    /// assert_eq!(format!("{:?}", ctx.get_value("count")), "Some(Number(2))");
+    /// ```
     pub fn set_value_str<V: Into<Value>>(
         &mut self,
         key: &str,
