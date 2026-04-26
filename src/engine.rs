@@ -1198,10 +1198,13 @@ fn url_encode(input: &str) -> String {
 // ─── Expression module ─────────────────────────────────────────────
 //
 // Tiny recursive-descent grammar used by `{{#if EXPR}}` (and, in later
-// phases, by other tag types). C1 covers comparison operators between
-// paths and literals:
+// phases, by other tag types). C1 added comparison operators; C2 layers
+// on boolean operators with conventional precedence (NOT > AND > OR):
 //
-//   expr       := comparison
+//   expr       := bool_or
+//   bool_or    := bool_and ( "or" bool_and )*
+//   bool_and   := bool_not ( "and" bool_not )*
+//   bool_not   := "not" bool_not | comparison
 //   comparison := operand ( ("==" | "!=" | "<" | "<=" | ">" | ">=") operand )?
 //   operand    := path | literal
 //   literal    := STRING | NUMBER | "true" | "false" | "null"
@@ -1210,6 +1213,10 @@ fn url_encode(input: &str) -> String {
 // A bare path (`{{#if user}}`) parses as a comparison with no operator
 // and evaluates to the path's value, so existing `#if X` callers keep
 // working without changes — `is_truthy` runs over the resulting Value.
+//
+// `and` / `or` / `not` are reserved when they appear as standalone
+// identifiers; dotted paths (e.g. `user.notes`) are unaffected because
+// the tokenizer only matches the keyword as a complete identifier.
 
 #[derive(Debug, Clone, PartialEq)]
 enum CmpOp {
@@ -1226,6 +1233,9 @@ enum Expr {
     Path(String),
     Literal(crate::context::Value),
     Compare(Box<Expr>, CmpOp, Box<Expr>),
+    And(Box<Expr>, Box<Expr>),
+    Or(Box<Expr>, Box<Expr>),
+    Not(Box<Expr>),
 }
 
 impl Expr {
@@ -1248,6 +1258,29 @@ impl Expr {
                 let l = lhs.eval(ctx)?;
                 let r = rhs.eval(ctx)?;
                 Value::Bool(apply_cmp(op, &l, &r)?)
+            }
+            // Boolean operators short-circuit: avoid evaluating the
+            // right operand when the left already decides the result.
+            // This keeps templates cheap when one side does an
+            // expensive lookup or comparison.
+            Expr::And(lhs, rhs) => {
+                let l = lhs.eval(ctx)?;
+                if l.is_truthy() {
+                    Value::Bool(rhs.eval(ctx)?.is_truthy())
+                } else {
+                    Value::Bool(false)
+                }
+            }
+            Expr::Or(lhs, rhs) => {
+                let l = lhs.eval(ctx)?;
+                if l.is_truthy() {
+                    Value::Bool(true)
+                } else {
+                    Value::Bool(rhs.eval(ctx)?.is_truthy())
+                }
+            }
+            Expr::Not(inner) => {
+                Value::Bool(!inner.eval(ctx)?.is_truthy())
             }
         })
     }
@@ -1294,13 +1327,49 @@ fn apply_cmp(
 /// separates tokens but is otherwise insignificant.
 fn parse_expr(s: &str) -> Result<Expr, EngineError> {
     let mut tokens = ExprTokens::new(s);
-    let expr = parse_comparison(&mut tokens)?;
+    let expr = parse_bool_or(&mut tokens)?;
     if let Some(extra) = tokens.peek() {
         return Err(EngineError::InvalidTemplate(format!(
             "unexpected token in expression: {extra:?}"
         )));
     }
     Ok(expr)
+}
+
+fn parse_bool_or(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    let mut lhs = parse_bool_and(tokens)?;
+    while matches!(tokens.peek(), Some(ExprTok::Or)) {
+        let _ = tokens.next();
+        let rhs = parse_bool_and(tokens)?;
+        lhs = Expr::Or(Box::new(lhs), Box::new(rhs));
+    }
+    Ok(lhs)
+}
+
+fn parse_bool_and(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    let mut lhs = parse_bool_not(tokens)?;
+    while matches!(tokens.peek(), Some(ExprTok::And)) {
+        let _ = tokens.next();
+        let rhs = parse_bool_not(tokens)?;
+        lhs = Expr::And(Box::new(lhs), Box::new(rhs));
+    }
+    Ok(lhs)
+}
+
+fn parse_bool_not(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    if matches!(tokens.peek(), Some(ExprTok::Not)) {
+        let _ = tokens.next();
+        let inner = parse_bool_not(tokens)?;
+        Ok(Expr::Not(Box::new(inner)))
+    } else {
+        parse_comparison(tokens)
+    }
 }
 
 fn parse_comparison(
@@ -1349,6 +1418,9 @@ enum ExprTok {
     False,
     Null,
     Op(CmpOp),
+    And,
+    Or,
+    Not,
 }
 
 /// Single-pass tokenizer. Tokens are produced lazily via `next` /
@@ -1491,6 +1563,9 @@ impl<'a> ExprTokens<'a> {
             "true" => ExprTok::True,
             "false" => ExprTok::False,
             "null" => ExprTok::Null,
+            "and" => ExprTok::And,
+            "or" => ExprTok::Or,
+            "not" => ExprTok::Not,
             _ => ExprTok::Path(raw),
         })
     }
@@ -2454,6 +2529,203 @@ mod tests {
         let out = engine
             .render_template(
                 "{{#if x == null}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    // ── Phase C2: boolean operators ────────────────────────────────
+
+    #[test]
+    fn if_combines_with_and_short_circuits_truth() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "a".to_string(),
+            crate::context::Value::Bool(true),
+        );
+        ctx.set_value(
+            "b".to_string(),
+            crate::context::Value::Bool(true),
+        );
+        let out = engine
+            .render_template(
+                "{{#if a and b}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+
+        ctx.set_value(
+            "b".to_string(),
+            crate::context::Value::Bool(false),
+        );
+        let out = engine
+            .render_template(
+                "{{#if a and b}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "no");
+    }
+
+    #[test]
+    fn if_combines_with_or_picks_truthy_branch() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "a".to_string(),
+            crate::context::Value::Bool(false),
+        );
+        ctx.set_value(
+            "b".to_string(),
+            crate::context::Value::Bool(true),
+        );
+        let out = engine
+            .render_template("{{#if a or b}}yes{{else}}no{{/if}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "yes");
+
+        ctx.set_value(
+            "b".to_string(),
+            crate::context::Value::Bool(false),
+        );
+        let out = engine
+            .render_template("{{#if a or b}}yes{{else}}no{{/if}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "no");
+    }
+
+    #[test]
+    fn if_negates_with_not() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "x".to_string(),
+            crate::context::Value::Bool(false),
+        );
+        let out = engine
+            .render_template("{{#if not x}}yes{{else}}no{{/if}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_double_negates_with_not_not() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "x".to_string(),
+            crate::context::Value::Bool(true),
+        );
+        let out = engine
+            .render_template(
+                "{{#if not not x}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_respects_not_over_and_over_or_precedence() {
+        // `not a and b or c` must parse as `((not a) and b) or c`.
+        // With a=true, b=true, c=false → ((false) and true) or false
+        // → false. With a=false, b=true, c=false → ((true) and true)
+        // or false → true. Same template, different context.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let template = "{{#if not a and b or c}}yes{{else}}no{{/if}}";
+
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "a".to_string(),
+            crate::context::Value::Bool(true),
+        );
+        ctx.set_value(
+            "b".to_string(),
+            crate::context::Value::Bool(true),
+        );
+        ctx.set_value(
+            "c".to_string(),
+            crate::context::Value::Bool(false),
+        );
+        assert_eq!(
+            engine.render_template(template, &ctx).unwrap(),
+            "no"
+        );
+
+        ctx.set_value(
+            "a".to_string(),
+            crate::context::Value::Bool(false),
+        );
+        assert_eq!(
+            engine.render_template(template, &ctx).unwrap(),
+            "yes"
+        );
+    }
+
+    #[test]
+    fn if_combines_comparisons_with_and_or() {
+        // Comparisons bind tighter than boolean ops.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "n".to_string(),
+            crate::context::Value::Number(7),
+        );
+        ctx.set_value(
+            "name".to_string(),
+            crate::context::Value::String("Ada".into()),
+        );
+        let out = engine
+            .render_template(
+                "{{#if n > 5 and name == \"Ada\"}}match{{else}}miss{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "match");
+    }
+
+    #[test]
+    fn if_or_short_circuits_past_unbound_path() {
+        // The right-hand operand should not even be evaluated when the
+        // left is already truthy. `missing` would resolve to Null
+        // either way (not an error), but this protects the contract.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "ready".to_string(),
+            crate::context::Value::Bool(true),
+        );
+        let out = engine
+            .render_template(
+                "{{#if ready or missing}}go{{else}}wait{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "go");
+    }
+
+    #[test]
+    fn if_dotted_path_with_and_substring_is_not_keyword() {
+        // The keyword detection only fires on standalone identifiers,
+        // so `user.notes` is still a valid path.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        let mut user: fnv::FnvHashMap<String, crate::context::Value> =
+            fnv::FnvHashMap::default();
+        let _ = user.insert(
+            "notes".to_string(),
+            crate::context::Value::String("hi".into()),
+        );
+        ctx.set_value(
+            "user".to_string(),
+            crate::context::Value::Map(user),
+        );
+        let out = engine
+            .render_template(
+                "{{#if user.notes}}yes{{else}}no{{/if}}",
                 &ctx,
             )
             .unwrap();
