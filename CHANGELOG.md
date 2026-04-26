@@ -144,6 +144,42 @@ cross-platform matrix on Linux + macOS + Windows.
   `render_template_32_tags`) guard these gains against regression.
 - **LRU cache eviction** — capacity-pressure inserts now evict the
   least-recently-used entry instead of clearing the whole cache.
+- **Phase D — closing the gap on Tera and Minijinja**:
+  - **Comparative bench matrix** vs Tera, Minijinja, Askama in
+    `benches/comparative.rs` (7 workloads × 4 engines, Criterion
+    groups).
+  - **SIMD HTML escape** via `askama_escape::Html` — same five-char
+    contract as before, ~10× faster on long inputs.
+    `escape_heavy/sw`: 34.4 µs → 22.8 µs (−34%, now matches Askama
+    at 22.9 µs and beats Tera at 84.2 µs by 3.7×).
+  - **Hoisted context clone out of `#each` loop** — was cloning the
+    full `Context` per iteration. `each_1000/sw`: 22.6 ms → 640 µs
+    (35×).
+  - **`Context::set_value_str(&str, V)`** — borrowed-key counterpart
+    to `set_value` that reuses the existing slot on update,
+    eliminating per-iteration `String` allocs in the loop helpers
+    (`this`, `@index`, `@first`, `@last`, `@key`).
+    `each_1000/sw`: 640 µs → 563 µs (−12%).
+  - **`Context::set_value_string(&str, &str)`** — `Value::String`
+    fast path that reuses the destination buffer in place via
+    `clear()` + `push_str()` instead of allocating a new `String`.
+    Wired into the `#each` iterator for `Value::String` items.
+    `each_100/sw`: 67 µs → 55 µs (−18%).
+  - **Allocation-free close-tag match in `extract_block`** — was
+    allocating a `String` via `format!("/{block}")` on every nested
+    tag scan; replaced with `strip_prefix('/')` + equality.
+  - **Cumulative each_1000 win: 22.6 ms → 535 µs (42×)**;
+    each_100: 326 µs → 54.9 µs (5.9×); escape_heavy: 34.4 µs →
+    22.8 µs (1.5×).
+  - **Final positioning** (full-quality 5 s measurements):
+    wins/ties Minijinja on `simple_sub`, `escape_heavy`,
+    `many_sub_32`, `filter_chain` (4 / 7); ties Askama on
+    `escape_heavy`; beats Tera on `escape_heavy` 3.7×. Remaining
+    2.85–3.6× gap on loops/conditionals is constant-factor per-tag
+    overhead in the AST walker; closing it would require a bytecode
+    compiler (explicitly out of scope).
+  - **`PERFORMANCE.md`** documents the full progression, what the
+    engine caches at runtime, and methodology.
 
 ### Changed
 

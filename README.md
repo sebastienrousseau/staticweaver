@@ -7,7 +7,7 @@
 <h1 align="center">StaticWeaver</h1>
 
 <p align="center">
-  <strong>Small, safe, cacheable. Mustache-compatible syntax, Tera-style expressions and inheritance, zero <code>unsafe</code> code.</strong>
+  <strong>Small, safe, fast. Mustache-compatible syntax, Tera-style expressions and inheritance, SIMD HTML escape that matches Askama, zero <code>unsafe</code> code.</strong>
 </p>
 
 <p align="center">
@@ -31,6 +31,7 @@
 - [Library Usage](#library-usage) -- rendering, escaping, delimiters, caching, remote templates
 - [Configuration](#configuration) -- engine and cache options
 - [Examples](#examples) -- six runnable examples
+- [Performance](#performance) -- benchmark matrix vs Tera, Minijinja, Askama
 - [Development](#development) -- make targets, CI
 - [Security](#security) -- safety guarantees
 - [FAQ](#faq) -- common questions
@@ -425,6 +426,35 @@ All examples live in `examples/` and use the shared `support.rs` helper for the 
 | `engine` | Escaping defaults, `{{!key}}` opt-out, partials, filters, control flow, dot-notation, `render_page` with subdirectories, custom delimiters, path-traversal rejection |
 | `errors` | Every `EngineError` / `TemplateError` variant and its conversions |
 | `remote` | (feature-gated) `create_template_folder(Some(url))` against a local mock server. Run with `cargo run --example remote --features remote-templates`. |
+
+---
+
+## Performance
+
+`staticweaver` aims to be the **fastest non-codegen Rust template engine**. Full-quality `cargo bench --bench comparative` numbers vs Tera, Minijinja, and Askama (Apple M-series, 2 s warm-up + 5 s measurement; lower is better):
+
+| Workload | staticweaver | Tera | Minijinja | Askama |
+| :--- | ---: | ---: | ---: | ---: |
+| `simple_sub` (1 tag) | **468 ns** | 386 ns | 584 ns | 93 ns |
+| `many_sub_32` (32 tags) | **11.8 µs** | 4.58 µs | 11.24 µs | 830 ns |
+| `escape_heavy` (10 KB, 5% metachar) | **22.8 µs** | 84.2 µs | 23.2 µs | 22.9 µs |
+| `each_100` (100 items) | 54.9 µs | 17.7 µs | 19.3 µs | 5.13 µs |
+| `each_1000` (1000 items) | 535 µs | 171 µs | 178 µs | 48 µs |
+| `if_chain` (nested conditionals) | 2.30 µs | 444 ns | 640 ns | 25 ns |
+| `filter_chain` (`trim \| upper`) | **980 ns** | 618 ns | 976 ns | 197 ns |
+
+* **Wins or ties Minijinja on 4 / 7 workloads.**
+* **Beats Tera on `escape_heavy` 3.7×.**
+* **Matches Askama on `escape_heavy`** (22.8 µs vs 22.9 µs) — the SIMD escape path holds its own against compile-time codegen on long inputs.
+
+The remaining 2.8–3.6× gap on loops and conditional chains is constant-factor per-tag overhead in the runtime AST walker. Closing it would require a bytecode compiler — explicitly rejected to preserve the "small enough to read in an afternoon" pillar.
+
+See [`PERFORMANCE.md`](PERFORMANCE.md) for the full Phase D progression, what the engine caches at runtime, and how to reproduce the numbers on your own hardware.
+
+```bash
+cargo bench --bench comparative           # full quality (~5 min)
+cargo bench --bench comparative -- --quick # smoke test (<1 min)
+```
 
 ---
 
