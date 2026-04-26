@@ -1199,27 +1199,32 @@ fn url_encode(input: &str) -> String {
 //
 // Tiny recursive-descent grammar used by `{{#if EXPR}}` (and, in later
 // phases, by other tag types). C1 added comparison operators; C2 layered
-// on boolean operators; C3 layers on integer math with `*`/`/` binding
-// tighter than `+`/`-`, both binding tighter than comparisons:
+// on boolean operators; C3 layered on integer math; C4 adds the postfix
+// `is <test>` predicates (`defined`, `empty`, `none`) with `is not` for
+// negation:
 //
 //   expr       := bool_or
 //   bool_or    := bool_and ( "or" bool_and )*
 //   bool_and   := bool_not ( "and" bool_not )*
-//   bool_not   := "not" bool_not | comparison
+//   bool_not   := "not" bool_not | test_expr
+//   test_expr  := comparison ( "is" "not"? TEST_NAME )?
 //   comparison := add_expr ( ("==" | "!=" | "<" | "<=" | ">" | ">=") add_expr )?
 //   add_expr   := mul_expr ( ("+" | "-") mul_expr )*
 //   mul_expr   := operand ( ("*" | "/") operand )*
 //   operand    := path | literal
 //   literal    := STRING | NUMBER | "true" | "false" | "null"
 //   path       := IDENT ("." IDENT)*
+//   TEST_NAME  := "defined" | "empty" | "none"
 //
 // A bare path (`{{#if user}}`) parses as a comparison with no operator
 // and evaluates to the path's value, so existing `#if X` callers keep
 // working without changes — `is_truthy` runs over the resulting Value.
 //
-// `and` / `or` / `not` are reserved when they appear as standalone
+// `and` / `or` / `not` / `is` are reserved when they appear as standalone
 // identifiers; dotted paths (e.g. `user.notes`) are unaffected because
-// the tokenizer only matches the keyword as a complete identifier.
+// the tokenizer only matches the keyword as a complete identifier. The
+// test names (`defined`, `empty`, `none`) are NOT keywords — they parse
+// as identifiers and the parser inspects them only after seeing `is`.
 //
 // Math is integer-only (the only numeric variant `Value` carries is
 // `i64`). Mixed-type math (`5 + "x"`) and division by zero return
@@ -1244,6 +1249,17 @@ enum MathOp {
     Div,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum TestKind {
+    /// Path resolves to a defined value (`get_path` returned `Some`).
+    /// Non-path operands return `true` iff the value is not `Null`.
+    Defined,
+    /// Empty string, empty list, empty map, or `Null`.
+    Empty,
+    /// Operand is `Value::Null`.
+    None,
+}
+
 #[derive(Debug, Clone)]
 enum Expr {
     Path(String),
@@ -1253,6 +1269,8 @@ enum Expr {
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
+    /// `lhs is [not] <kind>` — postfix predicate with optional negation.
+    Test(Box<Expr>, TestKind, bool),
 }
 
 impl Expr {
@@ -1303,6 +1321,28 @@ impl Expr {
             }
             Expr::Not(inner) => {
                 Value::Bool(!inner.eval(ctx)?.is_truthy())
+            }
+            Expr::Test(operand, kind, negated) => {
+                let result = match kind {
+                    // `defined` is special: when the operand is a
+                    // bare path we check for the path's existence
+                    // *without* defaulting to `Null`. For any other
+                    // operand shape we fall back to "not Null".
+                    TestKind::Defined => {
+                        if let Expr::Path(p) = operand.as_ref() {
+                            ctx.get_path(p).is_some()
+                        } else {
+                            !matches!(operand.eval(ctx)?, Value::Null)
+                        }
+                    }
+                    TestKind::Empty => {
+                        is_value_empty(&operand.eval(ctx)?)
+                    }
+                    TestKind::None => {
+                        matches!(operand.eval(ctx)?, Value::Null)
+                    }
+                };
+                Value::Bool(if *negated { !result } else { result })
             }
         })
     }
@@ -1396,6 +1436,21 @@ fn apply_math(
     }
 }
 
+/// Whether a value is "empty" for `is empty`. Strings, lists, maps
+/// each have a natural empty form; `Null` is considered empty so
+/// `unset is empty` is true. Numbers and bools are never empty —
+/// `0 is empty` is false on purpose, matching Tera/Jinja semantics.
+fn is_value_empty(v: &crate::context::Value) -> bool {
+    use crate::context::Value;
+    match v {
+        Value::Null => true,
+        Value::String(s) => s.is_empty(),
+        Value::List(l) => l.is_empty(),
+        Value::Map(m) => m.is_empty(),
+        Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
 /// Tokenizer + parser entry point. Walks `s` once; whitespace
 /// separates tokens but is otherwise insignificant.
 fn parse_expr(s: &str) -> Result<Expr, EngineError> {
@@ -1441,8 +1496,46 @@ fn parse_bool_not(
         let inner = parse_bool_not(tokens)?;
         Ok(Expr::Not(Box::new(inner)))
     } else {
-        parse_comparison(tokens)
+        parse_test_expr(tokens)
     }
+}
+
+fn parse_test_expr(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    let lhs = parse_comparison(tokens)?;
+    if !matches!(tokens.peek(), Some(ExprTok::Is)) {
+        return Ok(lhs);
+    }
+    let _ = tokens.next(); // consume `is`
+    let negated = matches!(tokens.peek(), Some(ExprTok::Not));
+    if negated {
+        let _ = tokens.next(); // consume `not`
+    }
+    let kind = match tokens.next() {
+        Some(ExprTok::Path(name)) => match name.as_str() {
+            "defined" => TestKind::Defined,
+            "empty" => TestKind::Empty,
+            "none" => TestKind::None,
+            other => {
+                return Err(EngineError::InvalidTemplate(format!(
+                    "unknown test `{other}` — expected \
+                     `defined`, `empty`, or `none`"
+                )));
+            }
+        },
+        Some(other) => {
+            return Err(EngineError::InvalidTemplate(format!(
+                "expected test name after `is`, got {other:?}"
+            )));
+        }
+        None => {
+            return Err(EngineError::InvalidTemplate(
+                "expected test name after `is`".to_string(),
+            ));
+        }
+    };
+    Ok(Expr::Test(Box::new(lhs), kind, negated))
 }
 
 fn parse_comparison(
@@ -1528,6 +1621,7 @@ enum ExprTok {
     And,
     Or,
     Not,
+    Is,
     Plus,
     Minus,
     Star,
@@ -1712,6 +1806,7 @@ impl<'a> ExprTokens<'a> {
             "and" => ExprTok::And,
             "or" => ExprTok::Or,
             "not" => ExprTok::Not,
+            "is" => ExprTok::Is,
             _ => ExprTok::Path(raw),
         })
     }
@@ -3070,6 +3165,254 @@ mod tests {
             format!("{err:?}").contains("integer overflow"),
             "expected overflow error, got: {err:?}"
         );
+    }
+
+    // ── Phase C4: postfix tests (is defined / empty / none) ────────
+
+    #[test]
+    fn if_is_defined_true_for_present_path() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "name".to_string(),
+            crate::context::Value::String("Ada".into()),
+        );
+        let out = engine
+            .render_template(
+                "{{#if name is defined}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_is_defined_false_for_missing_path() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#if missing is defined}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "no");
+    }
+
+    #[test]
+    fn if_is_defined_true_for_explicit_null() {
+        // Explicitly setting a key to Null still counts as defined,
+        // because the key exists. This matches Tera/Jinja semantics
+        // where `is defined` answers "does the variable exist".
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("x".to_string(), crate::context::Value::Null);
+        let out = engine
+            .render_template(
+                "{{#if x is defined}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_is_not_defined_negates() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#if missing is not defined}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_is_empty_true_for_empty_string_list_map_null() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "s".to_string(),
+            crate::context::Value::String(String::new()),
+        );
+        ctx.set_value(
+            "l".to_string(),
+            crate::context::Value::List(vec![]),
+        );
+        ctx.set_value(
+            "m".to_string(),
+            crate::context::Value::Map(fnv::FnvHashMap::default()),
+        );
+        ctx.set_value("z".to_string(), crate::context::Value::Null);
+        for key in ["s", "l", "m", "z"] {
+            let out = engine
+                .render_template(
+                    &format!(
+                        "{{{{#if {key} is empty}}}}yes{{{{else}}}}no{{{{/if}}}}"
+                    ),
+                    &ctx,
+                )
+                .unwrap();
+            assert_eq!(out, "yes", "{key} should be empty");
+        }
+    }
+
+    #[test]
+    fn if_is_empty_false_for_zero_and_false_and_nonempty_string() {
+        // Numbers and bools are never empty — `0 is empty` is false
+        // even though `0` is falsy. Tests probe a specific shape;
+        // truthiness is a separate axis.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "n".to_string(),
+            crate::context::Value::Number(0),
+        );
+        ctx.set_value(
+            "b".to_string(),
+            crate::context::Value::Bool(false),
+        );
+        ctx.set_value(
+            "s".to_string(),
+            crate::context::Value::String("hi".into()),
+        );
+        for key in ["n", "b", "s"] {
+            let out = engine
+                .render_template(
+                    &format!(
+                        "{{{{#if {key} is empty}}}}yes{{{{else}}}}no{{{{/if}}}}"
+                    ),
+                    &ctx,
+                )
+                .unwrap();
+            assert_eq!(out, "no", "{key} should not be empty");
+        }
+    }
+
+    #[test]
+    fn if_is_none_true_only_for_null() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("z".to_string(), crate::context::Value::Null);
+        ctx.set_value(
+            "s".to_string(),
+            crate::context::Value::String(String::new()),
+        );
+        let yes = engine
+            .render_template(
+                "{{#if z is none}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(yes, "yes");
+        let no = engine
+            .render_template(
+                "{{#if s is none}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(no, "no");
+    }
+
+    #[test]
+    fn if_is_not_none_negates() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "x".to_string(),
+            crate::context::Value::Number(5),
+        );
+        let out = engine
+            .render_template(
+                "{{#if x is not none}}set{{else}}null{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "set");
+    }
+
+    #[test]
+    fn if_unknown_test_name_errors_cleanly() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "x".to_string(),
+            crate::context::Value::Bool(true),
+        );
+        let err = engine
+            .render_template("{{#if x is bogus}}y{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("unknown test"),
+            "expected unknown-test error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn if_test_combines_with_boolean_ops() {
+        // `name is defined and name is not empty` is the canonical
+        // "has a non-blank value" check.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "name".to_string(),
+            crate::context::Value::String("Ada".into()),
+        );
+        let out = engine
+            .render_template(
+                "{{#if name is defined and name is not empty}}\
+                 ok{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "ok");
+
+        ctx.set_value(
+            "name".to_string(),
+            crate::context::Value::String(String::new()),
+        );
+        let out = engine
+            .render_template(
+                "{{#if name is defined and name is not empty}}\
+                 ok{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "no");
+    }
+
+    #[test]
+    fn if_dotted_path_can_test_for_definedness() {
+        // `user.email is defined` walks the dotted path before
+        // running the test.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        let mut user: fnv::FnvHashMap<String, crate::context::Value> =
+            fnv::FnvHashMap::default();
+        let _ = user.insert(
+            "email".to_string(),
+            crate::context::Value::String("a@b".into()),
+        );
+        ctx.set_value(
+            "user".to_string(),
+            crate::context::Value::Map(user),
+        );
+        let yes = engine
+            .render_template(
+                "{{#if user.email is defined}}y{{else}}n{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(yes, "y");
+        let no = engine
+            .render_template(
+                "{{#if user.phone is defined}}y{{else}}n{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(no, "n");
     }
 
     #[test]
