@@ -1086,7 +1086,14 @@ fn extract_block<'a>(
             || inner.starts_with("#block")
         {
             depth += 1;
-        } else if inner == format!("/{block}") {
+        // Avoid `inner == format!("/{block}")` which would allocate a
+        // String on every tag scan. The strip_prefix + equality
+        // sequence is allocation-free and equivalent. `map_or`
+        // (not `is_some_and`) keeps MSRV 1.68 compatibility.
+        } else if inner
+            .strip_prefix('/')
+            .map_or(false, |tail| tail == block)
+        {
             depth -= 1;
             if depth == 0 {
                 let body_raw = &template[..abs];
