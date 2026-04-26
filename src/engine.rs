@@ -398,6 +398,7 @@ impl Engine {
         let mut output = String::with_capacity(template.len());
         self.render_resolved(
             template,
+            template,
             context,
             BlockOverrides::new(),
             &mut output,
@@ -492,6 +493,7 @@ impl Engine {
     /// real render.
     fn render_resolved(
         &self,
+        origin: &str,
         template: &str,
         context: &Context,
         mut accumulated: BlockOverrides,
@@ -515,7 +517,11 @@ impl Engine {
                 let base_path = Path::new(&self.template_path)
                     .join(format!("{base_name}.html"));
                 let base_content = fs::read_to_string(&base_path)?;
+                // Switch `origin` to the base file's content — line
+                // numbers in errors reported during base-template
+                // rendering refer to the base file, not the child.
                 self.render_resolved(
+                    &base_content,
                     &base_content,
                     context,
                     accumulated,
@@ -524,6 +530,7 @@ impl Engine {
                 )
             }
             None => self.render_recursive(
+                origin,
                 template,
                 context,
                 &accumulated,
@@ -549,6 +556,7 @@ impl Engine {
     /// dot-notation, and nested control flow compose without duplication.
     fn render_recursive(
         &self,
+        origin: &str,
         template: &str,
         context: &Context,
         blocks: &BlockOverrides,
@@ -599,16 +607,18 @@ impl Engine {
 
             let after_open = &rest[start + open.len()..];
             let end = after_open.find(close).ok_or_else(|| {
-                EngineError::InvalidTemplate(
-                    "Unclosed template tag".to_string(),
-                )
+                EngineError::InvalidTemplate(format!(
+                    "Unclosed template tag{}",
+                    pos_suffix(origin, &rest[start..])
+                ))
             })?;
             let key_raw = &after_open[..end];
 
             if key_raw.contains(open) {
-                return Err(EngineError::InvalidTemplate(
-                    "Nested delimiters are not allowed".to_string(),
-                ));
+                return Err(EngineError::InvalidTemplate(format!(
+                    "Nested delimiters are not allowed{}",
+                    pos_suffix(origin, key_raw)
+                )));
             }
 
             // Whitespace control:
@@ -667,6 +677,7 @@ impl Engine {
                 };
                 if !chosen.is_empty() {
                     self.render_recursive(
+                        origin,
                         chosen,
                         active,
                         blocks,
@@ -684,7 +695,8 @@ impl Engine {
                     extract_block(after_tag, "each", open, close)?;
                 let target = active.get_path(arg).ok_or_else(|| {
                     EngineError::Render(format!(
-                        "#each: unresolved list `{arg}`"
+                        "#each: unresolved list `{arg}`{}",
+                        pos_suffix(origin, arg)
                     ))
                 })?;
                 // Iterate Lists by position (binds @index/@first/@last)
@@ -758,6 +770,7 @@ impl Engine {
                         child.set_value_str("@key", k.as_str());
                     }
                     self.render_recursive(
+                        origin,
                         body,
                         &child,
                         blocks,
@@ -808,6 +821,7 @@ impl Engine {
                     .map(String::as_str)
                     .unwrap_or(default_body);
                 self.render_recursive(
+                    origin,
                     body_to_render,
                     context,
                     blocks,
@@ -852,7 +866,12 @@ impl Engine {
                     &render_ctx
                 };
 
+                // Partial bodies are NEW &str values not in the
+                // outer origin — switch origin to the partial's
+                // content so any error inside the partial reports a
+                // line/column relative to the partial file.
                 self.render_recursive(
+                    &content,
                     &content,
                     ctx_ref,
                     blocks,
@@ -870,7 +889,8 @@ impl Engine {
                 || key_trimmed == "else"
             {
                 return Err(EngineError::InvalidTemplate(format!(
-                    "unexpected `{key_trimmed}` outside a block"
+                    "unexpected `{key_trimmed}` outside a block{}",
+                    pos_suffix(origin, key_trimmed)
                 )));
             }
 
@@ -911,7 +931,8 @@ impl Engine {
 
             let value = active.get_path(lookup).ok_or_else(|| {
                 EngineError::Render(format!(
-                    "Unresolved template tag: {lookup}"
+                    "Unresolved template tag: {lookup}{}",
+                    pos_suffix(origin, lookup)
                 ))
             })?;
             let mut rendered = value.to_string();
@@ -1319,6 +1340,43 @@ fn extract_block<'a>(
 /// Accepts `name`, `name:arg`, or `name:arg1,arg2,...`. Arguments may be
 /// quoted with single or double quotes (so commas can appear inside an
 /// arg). Returns `(name, args)` with surrounding whitespace removed.
+/// Returns the (1-based) line and column of `slice` within `origin`,
+/// or `None` if `slice` is not a substring of `origin` (which would
+/// happen for partials loaded from a different file). Implemented
+/// via pointer arithmetic — works because every &str the renderer
+/// produces is sliced from the original template, never freshly
+/// allocated.
+fn position_in(origin: &str, slice: &str) -> Option<(usize, usize)> {
+    let o_start = origin.as_ptr() as usize;
+    let s_start = slice.as_ptr() as usize;
+    let o_end = o_start.checked_add(origin.len())?;
+    if s_start < o_start || s_start > o_end {
+        return None;
+    }
+    let byte_pos = s_start - o_start;
+    let head = origin.get(..byte_pos)?;
+    let line = head.bytes().filter(|&b| b == b'\n').count() + 1;
+    let col = match head.rfind('\n') {
+        Some(p) => byte_pos - p,
+        None => byte_pos + 1,
+    };
+    Some((line, col))
+}
+
+/// Returns ` at line N, column M` for a slice that lives inside
+/// `origin`, or the empty string if the slice is unrelated. Append
+/// to user-facing error messages — the caller sees a useful pointer
+/// when the renderer can compute one, and gets the legacy bare
+/// message when it can't (cross-file partials, synthetic strings).
+fn pos_suffix(origin: &str, slice: &str) -> String {
+    match position_in(origin, slice) {
+        Some((line, col)) => {
+            format!(" at line {line}, column {col}")
+        }
+        None => String::new(),
+    }
+}
+
 fn parse_filter(spec: &str) -> (String, Vec<String>) {
     let spec = spec.trim();
     let (name, args_str) = match spec.find(':') {
@@ -2955,6 +3013,66 @@ mod tests {
     }
 
     // ── E2: Stream rendering ───────────────────────────────────────
+
+    // ── E3: Line numbers in error messages ─────────────────────────
+
+    #[test]
+    fn unresolved_tag_error_reports_line_and_column() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        // Line 2: "Hello {{missing}}". The lookup `missing` sits at
+        // column 9 (after "Hello " + "{{").
+        let template = "Header\nHello {{missing}}";
+        let err = engine.render_template(template, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("missing"), "got: {msg}");
+        assert!(msg.contains("line 2"), "got: {msg}");
+        assert!(msg.contains("column 9"), "got: {msg}");
+    }
+
+    #[test]
+    fn unresolved_each_list_reports_line_and_column() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let template = "\n\n{{#each undefined_list}}{{this}}{{/each}}";
+        let err = engine.render_template(template, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("undefined_list"), "got: {msg}");
+        assert!(msg.contains("line 3"), "got: {msg}");
+    }
+
+    #[test]
+    fn unclosed_tag_reports_line_number() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let template = "Line one\nLine two\nLine three {{ unclosed";
+        let err = engine.render_template(template, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("Unclosed"), "got: {msg}");
+        assert!(msg.contains("line 3"), "got: {msg}");
+    }
+
+    #[test]
+    fn stray_closing_tag_reports_line_number() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let template = "ok\n{{/if}}";
+        let err = engine.render_template(template, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("/if"), "got: {msg}");
+        assert!(msg.contains("line 2"), "got: {msg}");
+    }
+
+    #[test]
+    fn line_one_errors_report_line_one() {
+        // Single-line template: error should still say `line 1`.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err = engine.render_template("{{nope}}", &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("line 1"), "got: {msg}");
+        assert!(msg.contains("column 3"), "got: {msg}");
+    }
 
     #[test]
     fn render_to_writes_into_a_vec() {
