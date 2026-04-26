@@ -70,7 +70,39 @@ use crate::context::Context;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
+
+/// Signature of a user-registered filter, as accepted by
+/// [`Engine::add_filter`]. The filter receives the current pipeline
+/// value as `&str` and any colon-separated arguments as `&[String]`,
+/// and returns the transformed value or an `EngineError`. Wrapped in
+/// an `Arc` so an `Engine` stays cheap to clone.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::engine::{Engine, FilterFn};
+/// use staticweaver::EngineError;
+/// use std::sync::Arc;
+/// use std::time::Duration;
+///
+/// let slugify: FilterFn = Arc::new(
+///     |input: &str, _args: &[String]| -> Result<String, EngineError> {
+///         Ok(input
+///             .chars()
+///             .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+///             .collect())
+///     },
+/// );
+/// let mut engine = Engine::new("", Duration::from_secs(60));
+/// engine.add_filter("slugify", slugify);
+/// ```
+pub type FilterFn = Arc<
+    dyn Fn(&str, &[String]) -> Result<String, EngineError>
+        + Send
+        + Sync,
+>;
 
 /// Owned name → body map collected from a child template's
 /// `{{#block "name"}}…{{/block}}` declarations and consumed by the base
@@ -120,7 +152,6 @@ pub const DEFAULT_TEMPLATE_FILES: &[&str] = &[
 /// let out = engine.render_template("hello {{who}}", &ctx).unwrap();
 /// assert_eq!(out, "hello world");
 /// ```
-#[derive(Debug)]
 pub struct Engine {
     /// Path to the template directory.
     pub template_path: String,
@@ -134,6 +165,29 @@ pub struct Engine {
     /// (`&`, `<`, `>`, `"`, `'`). Prefix a key with `!` to opt out per-tag
     /// (e.g. `{{!content}}` emits the raw value).
     pub escape_html: bool,
+    /// User-registered filters keyed by name. Looked up *before* the
+    /// built-in filter set, so a custom filter can override a
+    /// built-in of the same name. Populate via [`Engine::add_filter`].
+    pub custom_filters: HashMap<String, FilterFn>,
+}
+
+// `Engine` is mostly auto-debuggable, but `custom_filters` carries
+// `Box<dyn Fn>`-style values that are not. Print only the registered
+// filter names so the rest of the struct still surfaces useful state.
+impl std::fmt::Debug for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Engine")
+            .field("template_path", &self.template_path)
+            .field("render_cache", &self.render_cache)
+            .field("open_delim", &self.open_delim)
+            .field("close_delim", &self.close_delim)
+            .field("escape_html", &self.escape_html)
+            .field(
+                "custom_filters",
+                &self.custom_filters.keys().collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl Engine {
@@ -160,7 +214,45 @@ impl Engine {
             open_delim: "{{".to_string(),
             close_delim: "}}".to_string(),
             escape_html: true,
+            custom_filters: HashMap::new(),
         }
+    }
+
+    /// Registers a custom filter under `name`. Custom filters are
+    /// looked up *before* the built-in set, so registering a name
+    /// that already exists (e.g. `uppercase`) overrides the built-in.
+    /// Returns `&mut Self` for builder-style chaining.
+    ///
+    /// The filter receives the current pipeline value as `&str` and
+    /// any colon-separated arguments as `&[String]`. See
+    /// [`FilterFn`] for the full signature.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::{Context, Engine};
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let mut engine = Engine::new("", Duration::from_secs(60));
+    /// engine.add_filter(
+    ///     "shout",
+    ///     Arc::new(|input, _args| Ok(format!("{}!!!", input.to_uppercase()))),
+    /// );
+    /// let mut ctx = Context::new();
+    /// ctx.set("greeting".to_string(), "hello".to_string());
+    /// let out = engine
+    ///     .render_template("{{greeting | shout}}", &ctx)
+    ///     .unwrap();
+    /// assert_eq!(out, "HELLO!!!");
+    /// ```
+    pub fn add_filter(
+        &mut self,
+        name: &str,
+        filter: FilterFn,
+    ) -> &mut Self {
+        let _ = self.custom_filters.insert(name.to_string(), filter);
+        self
     }
 
     /// Toggles HTML escaping for substituted values. Returns `self` for
@@ -754,7 +846,16 @@ impl Engine {
                 .map_or(false, |(name, _)| name == "safe");
 
             for (name, args) in &filters {
-                rendered = apply_filter(name, args, rendered)?;
+                // Custom filters take precedence over built-ins, so a
+                // user can override e.g. `uppercase` with their own
+                // locale-aware implementation.
+                rendered = if let Some(custom) =
+                    self.custom_filters.get(name.as_str())
+                {
+                    custom(&rendered, args)?
+                } else {
+                    apply_filter(name, args, rendered)?
+                };
             }
 
             if raw || marked_safe || !self.escape_html {
@@ -1101,14 +1202,10 @@ fn extract_block<'a>(
             || inner.starts_with("#block")
         {
             depth += 1;
-        // Avoid `inner == format!("/{block}")` which would allocate a
-        // String on every tag scan. The strip_prefix + equality
-        // sequence is allocation-free and equivalent. `map_or`
-        // (not `is_some_and`) keeps MSRV 1.68 compatibility.
-        } else if inner
-            .strip_prefix('/')
-            .map_or(false, |tail| tail == block)
-        {
+        // Avoid `inner == format!("/{block}")` which would allocate
+        // a String on every tag scan. The strip_prefix + equality
+        // comparison is allocation-free and clippy-clean.
+        } else if inner.strip_prefix('/') == Some(block) {
             depth -= 1;
             if depth == 0 {
                 let body_raw = &template[..abs];
@@ -2694,6 +2791,109 @@ mod tests {
         let raw =
             engine.render_template("{{ body | safe }}", &ctx).unwrap();
         assert_eq!(raw, "<b>hi</b>");
+    }
+
+    // ── E1: Custom filters API ─────────────────────────────────────
+
+    #[test]
+    fn add_filter_registers_custom_pipeline_step() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        let _ = engine.add_filter(
+            "shout",
+            Arc::new(|input, _args| {
+                Ok(format!("{}!!!", input.to_uppercase()))
+            }),
+        );
+        let mut ctx = Context::new();
+        ctx.set("greeting".to_string(), "hello".to_string());
+        let out = engine
+            .render_template("{{ greeting | shout }}", &ctx)
+            .unwrap();
+        // shout produces "HELLO!!!"; HTML escape leaves '!' alone.
+        assert_eq!(out, "HELLO!!!");
+    }
+
+    #[test]
+    fn add_filter_receives_arguments() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        let _ = engine.add_filter(
+            "wrap",
+            Arc::new(|input, args: &[String]| {
+                let pre =
+                    args.first().map(String::as_str).unwrap_or("[");
+                let post =
+                    args.get(1).map(String::as_str).unwrap_or("]");
+                Ok(format!("{pre}{input}{post}"))
+            }),
+        );
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let out = engine
+            .render_template(r#"{{ name | wrap:"<<",">>" }}"#, &ctx)
+            .unwrap();
+        // The output is HTML-escaped after the filter runs, so `<<`
+        // becomes `&lt;&lt;`. That's the same contract as built-in
+        // filters — `safe` is the documented opt-out.
+        assert_eq!(out, "&lt;&lt;Ada&gt;&gt;");
+    }
+
+    #[test]
+    fn add_filter_overrides_builtin_with_same_name() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        // Override `uppercase` to do the opposite — proves precedence.
+        let _ = engine.add_filter(
+            "uppercase",
+            Arc::new(|input, _args| Ok(input.to_lowercase())),
+        );
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "ADA".to_string());
+        let out = engine
+            .render_template("{{ name | uppercase }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "ada");
+    }
+
+    #[test]
+    fn add_filter_propagates_errors_from_user_code() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        let _ = engine.add_filter(
+            "boom",
+            Arc::new(|_input, _args| {
+                Err(EngineError::Render("filter exploded".to_string()))
+            }),
+        );
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "y".to_string());
+        let err =
+            engine.render_template("{{ x | boom }}", &ctx).unwrap_err();
+        assert!(
+            format!("{err}").contains("filter exploded"),
+            "expected filter error to propagate, got {err}"
+        );
+    }
+
+    #[test]
+    fn add_filter_chains_with_builtins() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        let _ = engine.add_filter(
+            "exclaim",
+            Arc::new(|input, _args| Ok(format!("{input}!"))),
+        );
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "  ada  ".to_string());
+        // built-in `trim` -> custom `exclaim` -> built-in `uppercase`
+        let out = engine
+            .render_template(
+                "{{ name | trim | exclaim | uppercase }}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "ADA!");
     }
 
     #[test]
