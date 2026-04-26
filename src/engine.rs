@@ -662,14 +662,21 @@ impl Engine {
             if let Some(arg) = key_trimmed.strip_prefix("#if") {
                 let arg = arg.trim();
                 let (body, after_block) =
-                    extract_block(after_tag, "if", open, close)?;
+                    extract_block(after_tag, "if", open, close)
+                        .map_err(|e| {
+                            annotate_pos(e, origin, key_trimmed)
+                        })?;
                 let (then_body, else_body) =
                     split_else(body, open, close);
                 // Parse `arg` as an expression (currently bare path or
                 // `lhs OP rhs` comparison). A bare path keeps the legacy
                 // truthiness semantics; a comparison evaluates to Bool
                 // and `is_truthy` agrees with it.
-                let cond = parse_expr(arg)?.eval(active)?.is_truthy();
+                let cond = parse_expr(arg)
+                    .map_err(|e| annotate_pos(e, origin, arg))?
+                    .eval(active)
+                    .map_err(|e| annotate_pos(e, origin, arg))?
+                    .is_truthy();
                 let chosen = if cond {
                     then_body
                 } else {
@@ -692,7 +699,10 @@ impl Engine {
             if let Some(arg) = key_trimmed.strip_prefix("#each") {
                 let arg = arg.trim();
                 let (body, after_block) =
-                    extract_block(after_tag, "each", open, close)?;
+                    extract_block(after_tag, "each", open, close)
+                        .map_err(|e| {
+                            annotate_pos(e, origin, key_trimmed)
+                        })?;
                 let target = active.get_path(arg).ok_or_else(|| {
                     EngineError::Render(format!(
                         "#each: unresolved list `{arg}`{}",
@@ -791,8 +801,10 @@ impl Engine {
             // Literals: quoted strings, integers, `true`/`false`/`null`,
             // or barewords (treated as a literal string).
             if let Some(rest_set) = key_trimmed.strip_prefix("#set") {
-                let (name, value) =
-                    parse_set_assignment(rest_set.trim())?;
+                let (name, value) = parse_set_assignment(
+                    rest_set.trim(),
+                )
+                .map_err(|e| annotate_pos(e, origin, key_trimmed))?;
                 if local.is_none() {
                     local = Some(active.clone());
                 }
@@ -813,9 +825,14 @@ impl Engine {
             // same `blocks` map.
             if let Some(name_part) = key_trimmed.strip_prefix("#block")
             {
-                let name = parse_block_name(name_part.trim())?;
+                let name = parse_block_name(name_part.trim()).map_err(
+                    |e| annotate_pos(e, origin, key_trimmed),
+                )?;
                 let (default_body, after_block) =
-                    extract_block(after_tag, "block", open, close)?;
+                    extract_block(after_tag, "block", open, close)
+                        .map_err(|e| {
+                            annotate_pos(e, origin, key_trimmed)
+                        })?;
                 let body_to_render: &str = blocks
                     .get(name)
                     .map(String::as_str)
@@ -859,7 +876,11 @@ impl Engine {
                     active
                 } else {
                     let mut child = active.clone();
-                    for (k, v) in parse_partial_params(params_str)? {
+                    for (k, v) in parse_partial_params(params_str)
+                        .map_err(|e| {
+                            annotate_pos(e, origin, key_trimmed)
+                        })?
+                    {
                         child.set_value(k, v);
                     }
                     render_ctx = child;
@@ -1374,6 +1395,32 @@ fn pos_suffix(origin: &str, slice: &str) -> String {
             format!(" at line {line}, column {col}")
         }
         None => String::new(),
+    }
+}
+
+/// Wraps an error produced by a helper (which has no access to
+/// `origin`) with the position of the slice the helper was working
+/// on. Idempotent: if the message already carries position info
+/// from a deeper layer, it is left alone.
+fn annotate_pos(
+    err: EngineError,
+    origin: &str,
+    slice: &str,
+) -> EngineError {
+    let suffix = pos_suffix(origin, slice);
+    if suffix.is_empty() {
+        return err;
+    }
+    match err {
+        EngineError::InvalidTemplate(msg)
+            if !msg.contains(" at line ") =>
+        {
+            EngineError::InvalidTemplate(format!("{msg}{suffix}"))
+        }
+        EngineError::Render(msg) if !msg.contains(" at line ") => {
+            EngineError::Render(format!("{msg}{suffix}"))
+        }
+        other => other,
     }
 }
 
@@ -3072,6 +3119,52 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("line 1"), "got: {msg}");
         assert!(msg.contains("column 3"), "got: {msg}");
+    }
+
+    // ── F1: Line:col on the remaining error sites ──────────────────
+
+    #[test]
+    fn malformed_if_expression_reports_line_number() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        // Bad expression: missing operand after `==`
+        let template = "ok\n{{#if a == }}x{{/if}}";
+        let err = engine.render_template(template, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("line 2"), "got: {msg}");
+    }
+
+    #[test]
+    fn unclosed_if_block_reports_line_number() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        // No matching {{/if}} — extract_block fails.
+        let template = "header\n{{#if true}}body\nstill body";
+        let err = engine.render_template(template, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("line 2"), "got: {msg}");
+    }
+
+    #[test]
+    fn malformed_set_assignment_reports_line_number() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        // Missing `=` makes parse_set_assignment fail.
+        let template = "ok\n{{#set badname}}";
+        let err = engine.render_template(template, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("line 2"), "got: {msg}");
+    }
+
+    #[test]
+    fn malformed_block_name_reports_line_number() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        // Empty block name should fail name parsing.
+        let template = "x\n{{#block }}body{{/block}}";
+        let err = engine.render_template(template, &ctx).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("line 2"), "got: {msg}");
     }
 
     #[test]
