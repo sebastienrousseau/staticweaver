@@ -558,19 +558,19 @@ impl Engine {
                 for (index, (key_opt, item)) in
                     entries.iter().enumerate()
                 {
-                    child
-                        .set_value("this".to_string(), (*item).clone());
-                    child.set_value(
-                        "@index".to_string(),
+                    // `set_value_str` reuses the existing key slot
+                    // after the first iteration — saves one String
+                    // allocation per loop variable per iteration
+                    // (5 × N for List with @key, 4 × N otherwise).
+                    child.set_value_str("this", (*item).clone());
+                    child.set_value_str(
+                        "@index",
                         i64::try_from(index).unwrap_or(i64::MAX),
                     );
-                    child.set_value("@first".to_string(), index == 0);
-                    child.set_value(
-                        "@last".to_string(),
-                        index + 1 == total,
-                    );
+                    child.set_value_str("@first", index == 0);
+                    child.set_value_str("@last", index + 1 == total);
                     if let Some(k) = key_opt {
-                        child.set_value("@key".to_string(), k.as_str());
+                        child.set_value_str("@key", k.as_str());
                     }
                     self.render_recursive(
                         body,

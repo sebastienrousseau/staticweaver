@@ -357,6 +357,36 @@ impl Context {
         let _ = self.elements.insert(key, value.into());
     }
 
+    /// Borrowed-key counterpart to [`Context::set_value`]. Allocates a
+    /// new `String` for the key only when no entry with that key
+    /// exists; on update the existing key is reused and only the value
+    /// slot is overwritten. Use this in tight loops where the same key
+    /// is set repeatedly — the `#each` iterator helpers (`this`,
+    /// `@index`, `@first`, `@last`, `@key`) are the canonical case.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Context;
+    ///
+    /// let mut ctx = Context::new();
+    /// // First call allocates the key; second call only overwrites the value.
+    /// ctx.set_value_str("count", 1);
+    /// ctx.set_value_str("count", 2);
+    /// assert_eq!(format!("{:?}", ctx.get_value("count")), "Some(Number(2))");
+    /// ```
+    pub fn set_value_str<V: Into<Value>>(
+        &mut self,
+        key: &str,
+        value: V,
+    ) {
+        if let Some(slot) = self.elements.get_mut(key) {
+            *slot = value.into();
+        } else {
+            let _ = self.elements.insert(key.to_string(), value.into());
+        }
+    }
+
     /// Returns the inner string for a `Value::String` entry, matching the
     /// historical signature. Non-string values return `None` (use
     /// [`Context::get_value`] or [`Context::get_path`] instead).
