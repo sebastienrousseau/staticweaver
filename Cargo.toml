@@ -76,6 +76,14 @@ criterion = "0.5"                           # Benchmarking library to test perfo
 # depending on a live network.
 mockito = "1"
 
+# Comparative benchmarks. Pulled in only for `cargo bench --bench
+# comparative` so they don't bloat ordinary test builds. All three are
+# runtime / compile-time templating engines we measure ourselves against
+# to keep performance claims honest.
+tera = { version = "1", default-features = false }
+minijinja = "2"
+askama = "0.12"
+
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
@@ -136,6 +144,14 @@ path = "examples/remote.rs"
 # Benchmarking configuration for performance testing.
 name = "template_benchmark"                   # Name of the benchmark
 harness = false                             # Disable the default benchmark harness (used by Criterion)
+
+[[bench]]
+# Comparative matrix vs Tera, Minijinja, and Askama. Uses the same
+# Criterion harness; produces one comparison group per workload so
+# `cargo bench --bench comparative` prints all four engines side by side.
+name = "comparative"
+path = "benches/comparative.rs"
+harness = false
 
 # -----------------------------------------------------------------------------
 # Documentation Configuration
