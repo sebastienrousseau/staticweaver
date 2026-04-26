@@ -1577,7 +1577,8 @@ fn url_encode(input: &str) -> String {
 //   bool_and   := bool_not ( "and" bool_not )*
 //   bool_not   := "not" bool_not | test_expr
 //   test_expr  := comparison ( "is" "not"? TEST_NAME )?
-//   comparison := add_expr ( ("==" | "!=" | "<" | "<=" | ">" | ">=") add_expr )?
+//   comparison := concat_expr ( ("==" | "!=" | "<" | "<=" | ">" | ">=") concat_expr )?
+//   concat_expr:= add_expr ( "~" add_expr )*
 //   add_expr   := mul_expr ( ("+" | "-") mul_expr )*
 //   mul_expr   := operand ( ("*" | "/") operand )*
 //   operand    := path | literal
@@ -1635,6 +1636,10 @@ enum Expr {
     Literal(crate::context::Value),
     Compare(Box<Expr>, CmpOp, Box<Expr>),
     Math(Box<Expr>, MathOp, Box<Expr>),
+    /// `lhs ~ rhs` — string concatenation. Both sides are coerced
+    /// to their `Display` form (Number → "5", Bool → "true",
+    /// Null → "", List/Map → "") and concatenated.
+    Concat(Box<Expr>, Box<Expr>),
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
@@ -1667,6 +1672,15 @@ impl Expr {
                 let l = lhs.eval(ctx)?;
                 let r = rhs.eval(ctx)?;
                 Value::Number(apply_math(op, &l, &r)?)
+            }
+            // String concat. Both sides go through Display, so any
+            // primitive (Number, Bool, String) renders sensibly;
+            // Null renders as "" and List/Map render as "" too,
+            // matching the substitution semantics.
+            Expr::Concat(lhs, rhs) => {
+                let l = lhs.eval(ctx)?;
+                let r = rhs.eval(ctx)?;
+                Value::String(format!("{l}{r}"))
             }
             // Boolean operators short-circuit: avoid evaluating the
             // right operand when the left already decides the result.
@@ -1910,18 +1924,30 @@ fn parse_test_expr(
 fn parse_comparison(
     tokens: &mut ExprTokens<'_>,
 ) -> Result<Expr, EngineError> {
-    let lhs = parse_add_expr(tokens)?;
+    let lhs = parse_concat_expr(tokens)?;
     let op = match tokens.peek() {
         Some(ExprTok::Op(op)) => Some(op.clone()),
         _ => None,
     };
     if let Some(op) = op {
         let _ = tokens.next();
-        let rhs = parse_add_expr(tokens)?;
+        let rhs = parse_concat_expr(tokens)?;
         Ok(Expr::Compare(Box::new(lhs), op, Box::new(rhs)))
     } else {
         Ok(lhs)
     }
+}
+
+fn parse_concat_expr(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    let mut lhs = parse_add_expr(tokens)?;
+    while matches!(tokens.peek(), Some(ExprTok::Tilde)) {
+        let _ = tokens.next();
+        let rhs = parse_add_expr(tokens)?;
+        lhs = Expr::Concat(Box::new(lhs), Box::new(rhs));
+    }
+    Ok(lhs)
 }
 
 fn parse_add_expr(
@@ -1995,6 +2021,8 @@ enum ExprTok {
     Minus,
     Star,
     Slash,
+    /// `~` — string concat (Tera/Twig-style).
+    Tilde,
 }
 
 /// Single-pass tokenizer. Tokens are produced lazily via `next` /
@@ -2104,6 +2132,13 @@ impl<'a> ExprTokens<'a> {
             b'-' if self.prev_was_operand => {
                 self.pos += 1;
                 return Some(ExprTok::Minus);
+            }
+            // `~` is the string-concat operator. Always binary;
+            // never overloaded as a unary prefix, so no
+            // prev_was_operand check.
+            b'~' => {
+                self.pos += 1;
+                return Some(ExprTok::Tilde);
             }
             _ => {}
         }
@@ -3154,6 +3189,91 @@ mod tests {
         let err = engine.render_template(template, &ctx).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("line 2"), "got: {msg}");
+    }
+
+    // ── F2: String concatenation operator (~) ─────────────────────
+
+    #[test]
+    fn if_concat_two_string_literals() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                r#"{{#if "foo" ~ "bar" == "foobar"}}y{{else}}n{{/if}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "y");
+    }
+
+    #[test]
+    fn if_concat_path_and_literal() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let out = engine
+            .render_template(
+                r#"{{#if name ~ " Lovelace" == "Ada Lovelace"}}y{{else}}n{{/if}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "y");
+    }
+
+    #[test]
+    fn if_concat_coerces_number_to_string() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 5);
+        let out = engine
+            .render_template(
+                r#"{{#if n ~ "x" == "5x"}}y{{else}}n{{/if}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "y");
+    }
+
+    #[test]
+    fn if_concat_left_associates() {
+        // "a" ~ "b" ~ "c" must parse as (("a" ~ "b") ~ "c") and produce "abc".
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                r#"{{#if "a" ~ "b" ~ "c" == "abc"}}y{{else}}n{{/if}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "y");
+    }
+
+    #[test]
+    fn if_concat_binds_tighter_than_comparison() {
+        // `a ~ b == c ~ d` must parse as `(a ~ b) == (c ~ d)`.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                r#"{{#if "a" ~ "b" == "a" ~ "b"}}y{{else}}n{{/if}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "y");
+    }
+
+    #[test]
+    fn if_concat_null_renders_as_empty() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("nope".to_string(), crate::context::Value::Null);
+        let out = engine
+            .render_template(
+                r#"{{#if nope ~ "x" == "x"}}y{{else}}n{{/if}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "y");
     }
 
     #[test]
