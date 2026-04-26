@@ -546,10 +546,18 @@ impl Engine {
                 };
 
                 let total = entries.len();
+                // Clone the active context ONCE, then mutate it in
+                // place across iterations. The previous code cloned
+                // per iteration — for each_1000, that was 1000 full
+                // Context clones. Loop variables (`this`, `@index`,
+                // `@first`, `@last`, `@key`) overwrite the same slots
+                // every iteration; nested `#set` writes to a local
+                // scope inside `render_recursive` and does not leak
+                // back into `child`, so cloning once is sound.
+                let mut child = active.clone();
                 for (index, (key_opt, item)) in
                     entries.iter().enumerate()
                 {
-                    let mut child = active.clone();
                     child
                         .set_value("this".to_string(), (*item).clone());
                     child.set_value(
