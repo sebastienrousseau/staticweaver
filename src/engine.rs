@@ -8,9 +8,22 @@
 
 use crate::cache::Cache;
 use crate::context::Context;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+
+/// Owned name → body map collected from a child template's
+/// `{{#block "name"}}…{{/block}}` declarations and consumed by the base
+/// template's matching `{{#block "name"}}` tags. Owned strings sidestep
+/// lifetime entanglement when blocks are merged across multiple
+/// `{{#extends}}` levels.
+type BlockOverrides = HashMap<String, String>;
+
+/// Maximum nesting depth for `{{#extends}}`, partial inclusion, and
+/// `{{#block}}` body rendering combined. Caps mutually-recursive
+/// templates before the stack does.
+const MAX_RENDER_DEPTH: usize = 10;
 
 #[cfg(feature = "remote-templates")]
 use std::{fs::File, io::Write, path::PathBuf};
@@ -231,8 +244,64 @@ impl Engine {
         }
 
         let mut output = String::with_capacity(template.len());
-        self.render_into(template, context, &mut output)?;
+        self.render_resolved(
+            template,
+            context,
+            BlockOverrides::new(),
+            &mut output,
+            0,
+        )?;
         Ok(output)
+    }
+
+    /// Resolves any `{{#extends "base"}}` chain on `template` before
+    /// rendering. Each level's `{{#block "name"}}…{{/block}}`
+    /// declarations are collected and merged into `accumulated`; child
+    /// definitions win over parent (or_insert preserves existing).
+    /// Once a template that does not extend anything is reached, the
+    /// fully-merged overrides are handed to `render_recursive` for the
+    /// real render.
+    fn render_resolved(
+        &self,
+        template: &str,
+        context: &Context,
+        mut accumulated: BlockOverrides,
+        output: &mut String,
+        depth: usize,
+    ) -> Result<(), EngineError> {
+        if depth > MAX_RENDER_DEPTH {
+            return Err(EngineError::Render(format!(
+                "Maximum template recursion depth ({MAX_RENDER_DEPTH}) exceeded"
+            )));
+        }
+        let open = self.open_delim.as_str();
+        let close = self.close_delim.as_str();
+
+        match parse_extends(template, open, close)? {
+            Some(base_name) => {
+                validate_path(base_name)?;
+                for (k, v) in collect_blocks(template, open, close)? {
+                    let _ = accumulated.entry(k).or_insert(v);
+                }
+                let base_path = Path::new(&self.template_path)
+                    .join(format!("{base_name}.html"));
+                let base_content = fs::read_to_string(&base_path)?;
+                self.render_resolved(
+                    &base_content,
+                    context,
+                    accumulated,
+                    output,
+                    depth + 1,
+                )
+            }
+            None => self.render_recursive(
+                template,
+                context,
+                &accumulated,
+                output,
+                depth,
+            ),
+        }
     }
 
     /// Recursive rendering core. Walks `template`, dispatching on tag
@@ -244,32 +313,23 @@ impl Engine {
     ///   - `{{#if key}}…{{/if}}`   — conditional block (optional `{{else}}`)
     ///   - `{{#each list}}…{{/each}}` — iterate a `Value::List`, binding
     ///     each element to `this`
+    ///   - `{{#block "name"}}…{{/block}}` — substitute the override from
+    ///     `blocks` if present, otherwise fall back to the default body
     ///
     /// Block bodies are rendered through this same function, so escaping,
     /// dot-notation, and nested control flow compose without duplication.
-    fn render_into(
-        &self,
-        template: &str,
-        context: &Context,
-        output: &mut String,
-    ) -> Result<(), EngineError> {
-        self.render_recursive(template, context, output, 0)
-    }
-
-    /// Internal rendering loop with a depth limit to catch infinite
-    /// recursion from circular partial includes.
     fn render_recursive(
         &self,
         template: &str,
         context: &Context,
+        blocks: &BlockOverrides,
         output: &mut String,
         depth: usize,
     ) -> Result<(), EngineError> {
-        if depth > 10 {
-            return Err(EngineError::Render(
-                "Maximum template recursion depth (10) exceeded"
-                    .to_string(),
-            ));
+        if depth > MAX_RENDER_DEPTH {
+            return Err(EngineError::Render(format!(
+                "Maximum template recursion depth ({MAX_RENDER_DEPTH}) exceeded"
+            )));
         }
 
         let open = self.open_delim.as_str();
@@ -368,6 +428,7 @@ impl Engine {
                     self.render_recursive(
                         chosen,
                         context,
+                        blocks,
                         output,
                         depth + 1,
                     )?;
@@ -436,10 +497,39 @@ impl Engine {
                     self.render_recursive(
                         body,
                         &child,
+                        blocks,
                         output,
                         depth + 1,
                     )?;
                 }
+                rest = after_block;
+                continue;
+            }
+
+            // ── Block placeholder ──────────────────────────────────
+            // `{{#block "name"}}default{{/block}}` substitutes the
+            // override from `blocks` if present, otherwise renders the
+            // default body. Nested blocks compose: when an outer block
+            // falls back to its default and that default contains
+            // another `{{#block "inner"}}`, the inner override (if any)
+            // still applies because the recursive call inherits the
+            // same `blocks` map.
+            if let Some(name_part) = key_trimmed.strip_prefix("#block")
+            {
+                let name = parse_block_name(name_part.trim())?;
+                let (default_body, after_block) =
+                    extract_block(after_tag, "block", open, close)?;
+                let body_to_render: &str = blocks
+                    .get(name)
+                    .map(String::as_str)
+                    .unwrap_or(default_body);
+                self.render_recursive(
+                    body_to_render,
+                    context,
+                    blocks,
+                    output,
+                    depth + 1,
+                )?;
                 rest = after_block;
                 continue;
             }
@@ -481,6 +571,7 @@ impl Engine {
                 self.render_recursive(
                     &content,
                     ctx_ref,
+                    blocks,
                     output,
                     depth + 1,
                 )?;
@@ -891,7 +982,10 @@ fn extract_block<'a>(
             parse_ws_control(after_open[..end].trim());
         let tag_end = abs + open.len() + end + close.len();
 
-        if inner.starts_with("#if") || inner.starts_with("#each") {
+        if inner.starts_with("#if")
+            || inner.starts_with("#each")
+            || inner.starts_with("#block")
+        {
             depth += 1;
         } else if inner == format!("/{block}") {
             depth -= 1;
@@ -910,7 +1004,9 @@ fn extract_block<'a>(
                 };
                 return Ok((body, after));
             }
-        } else if inner.starts_with("/if") || inner.starts_with("/each")
+        } else if inner.starts_with("/if")
+            || inner.starts_with("/each")
+            || inner.starts_with("/block")
         {
             // Closer for a different block type — must come from an
             // inner depth, decrement accordingly.
@@ -1067,6 +1163,92 @@ fn url_encode(input: &str) -> String {
     out
 }
 
+/// Strips matching single or double quotes from a name token. Returns
+/// the inner content unchanged if the token is unquoted.
+fn parse_block_name(s: &str) -> Result<&str, EngineError> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err(EngineError::InvalidTemplate(
+            "missing block name".to_string(),
+        ));
+    }
+    if s.len() >= 2 {
+        let bytes = s.as_bytes();
+        let first = bytes[0];
+        let last = bytes[s.len() - 1];
+        if (first == b'"' && last == b'"')
+            || (first == b'\'' && last == b'\'')
+        {
+            return Ok(&s[1..s.len() - 1]);
+        }
+    }
+    Ok(s)
+}
+
+/// Returns the base-template name if `template`'s first non-whitespace
+/// tag is `{{#extends "name"}}`, otherwise `None`. Quoted or bareword
+/// names both work.
+fn parse_extends<'a>(
+    template: &'a str,
+    open: &str,
+    close: &str,
+) -> Result<Option<&'a str>, EngineError> {
+    let trimmed = template.trim_start();
+    if !trimmed.starts_with(open) {
+        return Ok(None);
+    }
+    let after_open = &trimmed[open.len()..];
+    let end = after_open.find(close).ok_or_else(|| {
+        EngineError::InvalidTemplate(
+            "Unclosed template tag".to_string(),
+        )
+    })?;
+    let inner = parse_ws_control(after_open[..end].trim()).0;
+    if let Some(name_part) = inner.strip_prefix("#extends") {
+        Ok(Some(parse_block_name(name_part.trim())?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Walks a child template collecting every top-level
+/// `{{#block "name"}}…{{/block}}` declaration into an owned name → body
+/// map. Non-block tags (including the leading `#extends`) are skipped;
+/// any literal text between blocks is silently dropped, matching the
+/// Tera/Jinja convention that child templates only contribute block
+/// overrides.
+fn collect_blocks(
+    template: &str,
+    open: &str,
+    close: &str,
+) -> Result<BlockOverrides, EngineError> {
+    let mut out = BlockOverrides::new();
+    let mut rest = template;
+    while let Some(start) = rest.find(open) {
+        let after_open = &rest[start + open.len()..];
+        let end = after_open.find(close).ok_or_else(|| {
+            EngineError::InvalidTemplate(
+                "Unclosed template tag".to_string(),
+            )
+        })?;
+        let inner = parse_ws_control(after_open[..end].trim()).0;
+        let after_tag = &after_open[end + close.len()..];
+
+        if let Some(name_part) = inner.strip_prefix("#block") {
+            let name = parse_block_name(name_part.trim())?;
+            let (body, after_block) =
+                extract_block(after_tag, "block", open, close)?;
+            let _ = out.insert(name.to_string(), body.to_string());
+            rest = after_block;
+        } else {
+            // Not a block opener (e.g. `#extends`, comments, literal
+            // tags) — skip past it and keep scanning.
+            rest = after_tag;
+        }
+    }
+    Ok(out)
+}
+
 /// Splits a partial invocation at the first whitespace, separating the
 /// partial name from its `k=v` parameter list. `name` is everything up
 /// to the first space; `params` is everything after, trimmed.
@@ -1214,9 +1396,14 @@ fn split_else<'a>(
         let inner = strip_ws_dashes(after_open[..end].trim());
         let tag_end = abs + open.len() + end + close.len();
 
-        if inner.starts_with("#if") || inner.starts_with("#each") {
+        if inner.starts_with("#if")
+            || inner.starts_with("#each")
+            || inner.starts_with("#block")
+        {
             depth += 1;
-        } else if inner.starts_with("/if") || inner.starts_with("/each")
+        } else if inner.starts_with("/if")
+            || inner.starts_with("/each")
+            || inner.starts_with("/block")
         {
             depth = depth.saturating_sub(1);
         } else if inner == "else" && depth == 0 {
@@ -1734,6 +1921,233 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, "color=blue size=M ");
+    }
+
+    #[test]
+    fn extends_overrides_named_blocks_in_base() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("base.html"),
+            "<title>{{#block \"title\"}}Default{{/block}}</title>",
+        )
+        .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let child = "{{#extends \"base\"}}\
+                     {{#block \"title\"}}Custom{{/block}}";
+
+        let out = engine.render_template(child, &ctx).unwrap();
+        assert_eq!(out, "<title>Custom</title>");
+    }
+
+    #[test]
+    fn extends_falls_back_to_default_when_block_not_overridden() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("base.html"),
+            "[{{#block \"a\"}}A-default{{/block}}]\
+             [{{#block \"b\"}}B-default{{/block}}]",
+        )
+        .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        // Child only overrides `b`; `a` uses its default body.
+        let child = "{{#extends \"base\"}}\
+                     {{#block \"b\"}}B-custom{{/block}}";
+
+        let out = engine.render_template(child, &ctx).unwrap();
+        assert_eq!(out, "[A-default][B-custom]");
+    }
+
+    #[test]
+    fn extends_supports_nested_blocks_with_partial_overrides() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("base.html"),
+            "<head>\
+               {{#block \"head\"}}\
+                 <title>{{#block \"title\"}}Default{{/block}}</title>\
+               {{/block}}\
+             </head>",
+        )
+        .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        // Override only the inner block; outer falls back to default,
+        // which contains the now-overridden inner block.
+        let child = "{{#extends \"base\"}}\
+                     {{#block \"title\"}}Custom{{/block}}";
+
+        let out = engine.render_template(child, &ctx).unwrap();
+        assert_eq!(out, "<head><title>Custom</title></head>");
+    }
+
+    #[test]
+    fn extends_chains_through_multiple_levels() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("base.html"),
+            "{{#block \"x\"}}base-x{{/block}}",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("middle.html"),
+            "{{#extends \"base\"}}\
+             {{#block \"x\"}}middle-x{{/block}}",
+        )
+        .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        // Child overrides x; should win over middle's x.
+        let child = "{{#extends \"middle\"}}\
+                     {{#block \"x\"}}child-x{{/block}}";
+
+        let out = engine.render_template(child, &ctx).unwrap();
+        assert_eq!(out, "child-x");
+    }
+
+    #[test]
+    fn extends_chain_uses_middle_when_child_does_not_override() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("base.html"),
+            "{{#block \"x\"}}base-x{{/block}}",
+        )
+        .unwrap();
+        fs::write(
+            temp.path().join("middle.html"),
+            "{{#extends \"base\"}}\
+             {{#block \"x\"}}middle-x{{/block}}",
+        )
+        .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        // Child extends middle but doesn't override x — middle's x wins.
+        let child = "{{#extends \"middle\"}}";
+        let out = engine.render_template(child, &ctx).unwrap();
+        assert_eq!(out, "middle-x");
+    }
+
+    #[test]
+    fn extends_circular_chain_errors_at_depth_limit() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        // a extends b extends a → infinite chain capped by MAX_RENDER_DEPTH.
+        fs::write(temp.path().join("a.html"), "{{#extends \"b\"}}")
+            .unwrap();
+        fs::write(temp.path().join("b.html"), "{{#extends \"a\"}}")
+            .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let res = engine.render_template("{{#extends \"a\"}}", &ctx);
+        assert!(matches!(
+            res,
+            Err(EngineError::Render(msg)) if msg.contains("recursion depth"),
+        ));
+    }
+
+    #[test]
+    fn extends_drops_literal_text_outside_blocks_in_child() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("base.html"),
+            "[{{#block \"x\"}}default{{/block}}]",
+        )
+        .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        // Literal text "ignored garbage" between extends and the block
+        // contributes nothing to the output.
+        let child = "{{#extends \"base\"}}ignored garbage\
+                     {{#block \"x\"}}custom{{/block}}\
+                     more ignored garbage";
+        let out = engine.render_template(child, &ctx).unwrap();
+        assert_eq!(out, "[custom]");
+    }
+
+    #[test]
+    fn block_name_accepts_bareword_and_quoted_forms() {
+        // `parse_block_name` strips matching single/double quotes and
+        // returns the inner. Bareword passes through.
+        assert_eq!(parse_block_name("title").unwrap(), "title");
+        assert_eq!(parse_block_name("\"title\"").unwrap(), "title");
+        assert_eq!(parse_block_name("'title'").unwrap(), "title");
+        assert!(parse_block_name("").is_err());
+    }
+
+    #[test]
+    fn block_inside_each_renders_per_iteration() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("base.html"),
+            "{{#each items}}\
+               [{{#block \"item\"}}{{this}}{{/block}}]\
+             {{/each}}",
+        )
+        .unwrap();
+
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b", "c"]);
+        let child = "{{#extends \"base\"}}\
+                     {{#block \"item\"}}<{{this}}>{{/block}}";
+
+        let out = engine.render_template(child, &ctx).unwrap();
+        assert_eq!(out, "[<a>][<b>][<c>]");
     }
 
     #[test]
