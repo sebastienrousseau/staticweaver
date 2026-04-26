@@ -1536,10 +1536,83 @@ fn apply_filter(
         // (see `apply_filter_chain`). Here `safe` is a no-op pass-through
         // so the chain composes naturally.
         "safe" => Ok(input),
+        // Numeric filters. Inputs are parsed as f64 so they accept
+        // both i64-shaped strings ("42") and float-shaped strings
+        // ("3.14"); pass-through identity for ceil/floor/round on
+        // values that happen to have no fractional part.
+        "abs" => parse_number_filter(&input, "abs", |n| n.abs()),
+        "round" => parse_number_filter(&input, "round", |n| n.round()),
+        "ceil" => parse_number_filter(&input, "ceil", |n| n.ceil()),
+        "floor" => parse_number_filter(&input, "floor", |n| n.floor()),
+        "number_format" => {
+            let sep =
+                args.first().map(String::as_str).unwrap_or(",");
+            number_format(&input, sep)
+        }
         unknown => Err(EngineError::Render(format!(
             "Unknown filter: {unknown}"
         ))),
     }
+}
+
+/// Parses `input` as `f64`, applies `op`, formats the result. If
+/// the result has no fractional part it renders as an integer
+/// ("3" not "3.0"). Used by abs/round/ceil/floor.
+fn parse_number_filter(
+    input: &str,
+    name: &str,
+    op: impl FnOnce(f64) -> f64,
+) -> Result<String, EngineError> {
+    let n: f64 = input.trim().parse().map_err(|_| {
+        EngineError::Render(format!(
+            "{name} filter: expected a number, got `{input}`"
+        ))
+    })?;
+    let r = op(n);
+    Ok(if r.is_finite() && r.fract() == 0.0 {
+        format!("{}", r as i64)
+    } else {
+        format!("{r}")
+    })
+}
+
+/// Inserts `sep` between every group of three digits, counting from
+/// the decimal point (or the end of the integer). Preserves a
+/// leading `-`. Non-numeric input returns an error.
+fn number_format(
+    input: &str,
+    sep: &str,
+) -> Result<String, EngineError> {
+    let trimmed = input.trim();
+    let (sign, rest) = match trimmed.strip_prefix('-') {
+        Some(r) => ("-", r),
+        None => ("", trimmed),
+    };
+    let (int_part, frac_part) = match rest.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (rest, None),
+    };
+    if int_part.is_empty()
+        || !int_part.chars().all(|c| c.is_ascii_digit())
+        || frac_part
+            .map_or(false, |f| !f.chars().all(|c| c.is_ascii_digit()))
+    {
+        return Err(EngineError::Render(format!(
+            "number_format filter: expected a number, got `{input}`"
+        )));
+    }
+    let bytes = int_part.as_bytes();
+    let mut grouped = String::with_capacity(int_part.len() * 2);
+    for (i, &b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            grouped.push_str(sep);
+        }
+        grouped.push(b as char);
+    }
+    Ok(match frac_part {
+        Some(f) => format!("{sign}{grouped}.{f}"),
+        None => format!("{sign}{grouped}"),
+    })
 }
 
 /// RFC 3986 percent-encoding for the unreserved set (`A-Z a-z 0-9 - _ . ~`).
@@ -3189,6 +3262,131 @@ mod tests {
         let err = engine.render_template(template, &ctx).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("line 2"), "got: {msg}");
+    }
+
+    // ── F3: Number formatting filters ─────────────────────────────
+
+    #[test]
+    fn filter_abs_strips_sign() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), -42i64);
+        let out =
+            engine.render_template("{{ n | abs }}", &ctx).unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn filter_round_to_integer() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("price".to_string(), "3.6".to_string());
+        let out = engine
+            .render_template("{{ price | round }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "4");
+    }
+
+    #[test]
+    fn filter_ceil_rounds_up() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("v".to_string(), "2.1".to_string());
+        let out =
+            engine.render_template("{{ v | ceil }}", &ctx).unwrap();
+        assert_eq!(out, "3");
+    }
+
+    #[test]
+    fn filter_floor_rounds_down() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("v".to_string(), "2.9".to_string());
+        let out =
+            engine.render_template("{{ v | floor }}", &ctx).unwrap();
+        assert_eq!(out, "2");
+    }
+
+    #[test]
+    fn filter_round_on_integer_is_identity() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 5i64);
+        let out =
+            engine.render_template("{{ n | round }}", &ctx).unwrap();
+        assert_eq!(out, "5");
+    }
+
+    #[test]
+    fn filter_number_format_default_comma() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 1_234_567i64);
+        let out = engine
+            .render_template("{{ n | number_format }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "1,234,567");
+    }
+
+    #[test]
+    fn filter_number_format_custom_separator() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 1_234_567i64);
+        let out = engine
+            .render_template(r#"{{ n | number_format:"_" }}"#, &ctx)
+            .unwrap();
+        assert_eq!(out, "1_234_567");
+    }
+
+    #[test]
+    fn filter_number_format_handles_negative_and_decimals() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("p".to_string(), "-1234567.89".to_string());
+        let out = engine
+            .render_template("{{ p | number_format }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "-1,234,567.89");
+    }
+
+    #[test]
+    fn filter_number_format_short_number_unchanged() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 42i64);
+        let out = engine
+            .render_template("{{ n | number_format }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn filter_round_on_non_number_errors_cleanly() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let err = engine
+            .render_template("{{ name | round }}", &ctx)
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("expected a number"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn filter_number_format_on_non_number_errors_cleanly() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let err = engine
+            .render_template("{{ name | number_format }}", &ctx)
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("expected a number"),
+            "got {err}"
+        );
     }
 
     // ── F2: String concatenation operator (~) ─────────────────────
