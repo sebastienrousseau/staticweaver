@@ -69,6 +69,7 @@ use crate::cache::Cache;
 use crate::context::Context;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -117,7 +118,7 @@ type BlockOverrides = HashMap<String, String>;
 const MAX_RENDER_DEPTH: usize = 10;
 
 #[cfg(feature = "remote-templates")]
-use std::{fs::File, io::Write, path::PathBuf};
+use std::{fs::File, path::PathBuf};
 
 /// Canonical engine error type. Re-exported from `crate::error` to keep a
 /// single source of truth; callers can use either `staticweaver::EngineError`
@@ -403,6 +404,83 @@ impl Engine {
             0,
         )?;
         Ok(output)
+    }
+
+    /// Renders `template` against `context` and writes the result
+    /// directly to `writer`. Convenience wrapper for callers that want
+    /// to stream into a `Vec<u8>`, an HTTP response body, a file, or
+    /// any other [`std::io::Write`] sink without managing the
+    /// intermediate `String` themselves.
+    ///
+    /// Equivalent to `writer.write_all(engine.render_template(t, c)?
+    /// .as_bytes())` with two differences: I/O failures map cleanly
+    /// to `EngineError::Io`, and a future zero-copy variant could
+    /// land here without changing the call site.
+    ///
+    /// # Note
+    ///
+    /// The implementation still allocates one `String` internally.
+    /// The whitespace-control trim (`{{- ... -}}`) needs lookback
+    /// into the rendered buffer, which `io::Write` cannot provide.
+    /// True zero-copy streaming would require either dropping
+    /// `{{- -}}` support or buffering the would-be-trimmed bytes;
+    /// neither is worth the API churn today.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::{Context, Engine};
+    /// use std::time::Duration;
+    ///
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("name".to_string(), "Ada".to_string());
+    ///
+    /// let mut buf: Vec<u8> = Vec::new();
+    /// engine
+    ///     .render_to("Hello, {{name}}!", &ctx, &mut buf)
+    ///     .unwrap();
+    /// assert_eq!(buf, b"Hello, Ada!");
+    /// ```
+    pub fn render_to<W: Write>(
+        &self,
+        template: &str,
+        context: &Context,
+        writer: &mut W,
+    ) -> Result<(), EngineError> {
+        let rendered = self.render_template(template, context)?;
+        writer.write_all(rendered.as_bytes())?;
+        Ok(())
+    }
+
+    /// File-backed counterpart to [`Engine::render_to`]. Looks up
+    /// `layout` in `template_path` (with `.html` appended), renders
+    /// the page, and writes the result to `writer`. Caches the
+    /// rendered output by `(layout, ctx.hash())` like
+    /// [`Engine::render_page`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use staticweaver::{Context, Engine};
+    /// use std::time::Duration;
+    /// use std::fs::File;
+    ///
+    /// let mut engine = Engine::new("templates", Duration::from_secs(60));
+    /// let ctx = Context::new();
+    ///
+    /// let mut out = File::create("/tmp/page.html").unwrap();
+    /// engine.render_page_to(&ctx, "index", &mut out).unwrap();
+    /// ```
+    pub fn render_page_to<W: Write>(
+        &mut self,
+        context: &Context,
+        layout: &str,
+        writer: &mut W,
+    ) -> Result<(), EngineError> {
+        let rendered = self.render_page(context, layout)?;
+        writer.write_all(rendered.as_bytes())?;
+        Ok(())
     }
 
     /// Resolves any `{{#extends "base"}}` chain on `template` before
@@ -1003,8 +1081,8 @@ impl Engine {
                 let dir = Self::download_files_from_url(path, files)?;
                 return dir.to_str().map(str::to_string).ok_or_else(
                     || {
-                        EngineError::Io(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
+                        EngineError::Io(io::Error::new(
+                            io::ErrorKind::InvalidData,
                             "Invalid UTF-8 sequence in template path",
                         ))
                     },
@@ -1025,14 +1103,14 @@ impl Engine {
         let local_path = current_dir.join(path);
         if local_path.exists() && local_path.is_dir() {
             local_path.to_str().map(str::to_string).ok_or_else(|| {
-                EngineError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
+                EngineError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
                     "Invalid UTF-8 sequence in template path",
                 ))
             })
         } else {
-            Err(EngineError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
+            Err(EngineError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
                 format!("Template directory not found: {path}"),
             )))
         }
@@ -2874,6 +2952,70 @@ mod tests {
             format!("{err}").contains("filter exploded"),
             "expected filter error to propagate, got {err}"
         );
+    }
+
+    // ── E2: Stream rendering ───────────────────────────────────────
+
+    #[test]
+    fn render_to_writes_into_a_vec() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let mut buf: Vec<u8> = Vec::new();
+        engine
+            .render_to("Hello, {{name}}!", &ctx, &mut buf)
+            .unwrap();
+        assert_eq!(buf, b"Hello, Ada!");
+    }
+
+    #[test]
+    fn render_to_matches_render_template_byte_for_byte() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("title".to_string(), "Posts".to_string());
+        ctx.set_value(
+            "items".to_string(),
+            vec!["alpha", "beta", "gamma"],
+        );
+        let template = "<h1>{{title | uppercase}}</h1>\
+                        <ul>{{#each items}}<li>{{this}}</li>{{/each}}</ul>";
+        let direct = engine.render_template(template, &ctx).unwrap();
+        let mut streamed: Vec<u8> = Vec::new();
+        engine.render_to(template, &ctx, &mut streamed).unwrap();
+        assert_eq!(streamed, direct.into_bytes());
+    }
+
+    #[test]
+    fn render_to_propagates_io_errors() {
+        // A writer that always fails proves errors map to EngineError::Io.
+        struct Bomb;
+        impl Write for Bomb {
+            fn write(&mut self, _b: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::Other, "no"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "y".to_string());
+        let err =
+            engine.render_to("{{x}}", &ctx, &mut Bomb).unwrap_err();
+        assert!(matches!(err, EngineError::Io(_)));
+    }
+
+    #[test]
+    fn render_to_propagates_template_errors() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let mut buf: Vec<u8> = Vec::new();
+        let err = engine
+            .render_to("{{missing}}", &ctx, &mut buf)
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Render(_)));
+        // Writer was not partially written when render fails first.
+        assert!(buf.is_empty());
     }
 
     #[test]
@@ -4728,7 +4870,7 @@ mod tests {
             "this-directory-does-not-exist-on-any-machine",
         )) {
             Err(EngineError::Io(e)) => {
-                assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+                assert_eq!(e.kind(), io::ErrorKind::NotFound);
             }
             other => panic!("expected Io(NotFound), got {other:?}"),
         }
