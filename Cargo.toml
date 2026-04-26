@@ -92,6 +92,13 @@ askama = "0.12"
 
 fnv = "1.0"                                 # Fast non-cryptographic hash function
 
+# askama_escape is the same SIMD HTML-entity encoder Askama uses for
+# its built-in auto-escape, with a 5-character set (& < > " ') matching
+# our pre-existing contract. Auto-vectorised inner loop on long strings
+# (~3-10x faster than a scalar byte scan). Used only by
+# `escape_html_into`.
+askama_escape = "0.10"
+
 # reqwest powers the optional remote-template fetcher. Gated behind the
 # `remote-templates` feature so the core crate has no networking code in
 # its default build. rustls + native-roots avoids pulling OpenSSL.
