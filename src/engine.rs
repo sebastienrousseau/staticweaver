@@ -426,9 +426,11 @@ impl Engine {
                     extract_block(after_tag, "if", open, close)?;
                 let (then_body, else_body) =
                     split_else(body, open, close);
-                let cond = active
-                    .get_path(arg)
-                    .map_or(false, |v| v.is_truthy());
+                // Parse `arg` as an expression (currently bare path or
+                // `lhs OP rhs` comparison). A bare path keeps the legacy
+                // truthiness semantics; a comparison evaluates to Bool
+                // and `is_truthy` agrees with it.
+                let cond = parse_expr(arg)?.eval(active)?.is_truthy();
                 let chosen = if cond {
                     then_body
                 } else {
@@ -1192,6 +1194,317 @@ fn url_encode(input: &str) -> String {
     }
     out
 }
+
+// ─── Expression module ─────────────────────────────────────────────
+//
+// Tiny recursive-descent grammar used by `{{#if EXPR}}` (and, in later
+// phases, by other tag types). C1 covers comparison operators between
+// paths and literals:
+//
+//   expr       := comparison
+//   comparison := operand ( ("==" | "!=" | "<" | "<=" | ">" | ">=") operand )?
+//   operand    := path | literal
+//   literal    := STRING | NUMBER | "true" | "false" | "null"
+//   path       := IDENT ("." IDENT)*
+//
+// A bare path (`{{#if user}}`) parses as a comparison with no operator
+// and evaluates to the path's value, so existing `#if X` callers keep
+// working without changes — `is_truthy` runs over the resulting Value.
+
+#[derive(Debug, Clone, PartialEq)]
+enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+#[derive(Debug, Clone)]
+enum Expr {
+    Path(String),
+    Literal(crate::context::Value),
+    Compare(Box<Expr>, CmpOp, Box<Expr>),
+}
+
+impl Expr {
+    /// Evaluates the expression against `ctx`, returning the result as a
+    /// `Value`. Comparison expressions return `Value::Bool`; bare path
+    /// expressions return whatever the lookup resolves to (or `Null`
+    /// when missing). The caller decides what to do with the result —
+    /// `#if` checks `is_truthy`.
+    fn eval(
+        &self,
+        ctx: &Context,
+    ) -> Result<crate::context::Value, EngineError> {
+        use crate::context::Value;
+        Ok(match self {
+            Expr::Path(p) => {
+                ctx.get_path(p).cloned().unwrap_or(Value::Null)
+            }
+            Expr::Literal(v) => v.clone(),
+            Expr::Compare(lhs, op, rhs) => {
+                let l = lhs.eval(ctx)?;
+                let r = rhs.eval(ctx)?;
+                Value::Bool(apply_cmp(op, &l, &r)?)
+            }
+        })
+    }
+}
+
+/// Compares two values per `op`. `Eq`/`Ne` use structural equality and
+/// work on every variant pair. The ordered comparisons (`Lt`/`Le`/`Gt`
+/// /`Ge`) require both operands to be numbers or both to be strings;
+/// any other combination returns an `InvalidTemplate` error so authors
+/// get a clear message instead of silent type coercion.
+fn apply_cmp(
+    op: &CmpOp,
+    lhs: &crate::context::Value,
+    rhs: &crate::context::Value,
+) -> Result<bool, EngineError> {
+    use crate::context::Value;
+    use std::cmp::Ordering;
+    match op {
+        CmpOp::Eq => Ok(lhs == rhs),
+        CmpOp::Ne => Ok(lhs != rhs),
+        _ => {
+            let ord = match (lhs, rhs) {
+                (Value::Number(a), Value::Number(b)) => a.cmp(b),
+                (Value::String(a), Value::String(b)) => a.cmp(b),
+                _ => {
+                    return Err(EngineError::InvalidTemplate(format!(
+                        "cannot order {lhs:?} and {rhs:?} — \
+                         both operands must be numbers or both strings"
+                    )));
+                }
+            };
+            Ok(matches!(
+                (op, ord),
+                (CmpOp::Lt, Ordering::Less)
+                    | (CmpOp::Le, Ordering::Less | Ordering::Equal)
+                    | (CmpOp::Gt, Ordering::Greater)
+                    | (CmpOp::Ge, Ordering::Greater | Ordering::Equal)
+            ))
+        }
+    }
+}
+
+/// Tokenizer + parser entry point. Walks `s` once; whitespace
+/// separates tokens but is otherwise insignificant.
+fn parse_expr(s: &str) -> Result<Expr, EngineError> {
+    let mut tokens = ExprTokens::new(s);
+    let expr = parse_comparison(&mut tokens)?;
+    if let Some(extra) = tokens.peek() {
+        return Err(EngineError::InvalidTemplate(format!(
+            "unexpected token in expression: {extra:?}"
+        )));
+    }
+    Ok(expr)
+}
+
+fn parse_comparison(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    let lhs = parse_operand(tokens)?;
+    let op = match tokens.peek() {
+        Some(ExprTok::Op(op)) => Some(op.clone()),
+        _ => None,
+    };
+    if let Some(op) = op {
+        let _ = tokens.next();
+        let rhs = parse_operand(tokens)?;
+        Ok(Expr::Compare(Box::new(lhs), op, Box::new(rhs)))
+    } else {
+        Ok(lhs)
+    }
+}
+
+fn parse_operand(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    use crate::context::Value;
+    match tokens.next() {
+        Some(ExprTok::Path(p)) => Ok(Expr::Path(p)),
+        Some(ExprTok::Number(n)) => Ok(Expr::Literal(Value::Number(n))),
+        Some(ExprTok::String(s)) => Ok(Expr::Literal(Value::String(s))),
+        Some(ExprTok::True) => Ok(Expr::Literal(Value::Bool(true))),
+        Some(ExprTok::False) => Ok(Expr::Literal(Value::Bool(false))),
+        Some(ExprTok::Null) => Ok(Expr::Literal(Value::Null)),
+        Some(other) => Err(EngineError::InvalidTemplate(format!(
+            "expected operand, got {other:?}"
+        ))),
+        None => Err(EngineError::InvalidTemplate(
+            "expected operand, got end of expression".to_string(),
+        )),
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ExprTok {
+    Path(String),
+    Number(i64),
+    String(String),
+    True,
+    False,
+    Null,
+    Op(CmpOp),
+}
+
+/// Single-pass tokenizer. Tokens are produced lazily via `next` /
+/// `peek`; we cache one token of lookahead so the parser stays
+/// straight-line. Errors surface as `InvalidTemplate` immediately on
+/// the offending byte rather than waiting until parse-time.
+struct ExprTokens<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+    peeked: Option<ExprTok>,
+    consumed_peek: bool,
+}
+
+impl<'a> ExprTokens<'a> {
+    fn new(s: &'a str) -> Self {
+        Self {
+            bytes: s.as_bytes(),
+            pos: 0,
+            peeked: None,
+            consumed_peek: false,
+        }
+    }
+
+    fn peek(&mut self) -> Option<&ExprTok> {
+        if self.peeked.is_none() {
+            self.peeked = self.scan_one();
+        }
+        self.peeked.as_ref()
+    }
+
+    fn next(&mut self) -> Option<ExprTok> {
+        if let Some(tok) = self.peeked.take() {
+            self.consumed_peek = true;
+            return Some(tok);
+        }
+        self.scan_one()
+    }
+
+    fn scan_one(&mut self) -> Option<ExprTok> {
+        // Skip whitespace.
+        while self.pos < self.bytes.len()
+            && self.bytes[self.pos].is_ascii_whitespace()
+        {
+            self.pos += 1;
+        }
+        if self.pos >= self.bytes.len() {
+            return None;
+        }
+        let b = self.bytes[self.pos];
+        // Two-character comparison operators come first so they win
+        // over the single-char prefix check below.
+        if self.pos + 1 < self.bytes.len() {
+            let two = &self.bytes[self.pos..self.pos + 2];
+            let op = match two {
+                b"==" => Some(CmpOp::Eq),
+                b"!=" => Some(CmpOp::Ne),
+                b"<=" => Some(CmpOp::Le),
+                b">=" => Some(CmpOp::Ge),
+                _ => None,
+            };
+            if let Some(op) = op {
+                self.pos += 2;
+                return Some(ExprTok::Op(op));
+            }
+        }
+        // Single-char comparison operators.
+        match b {
+            b'<' => {
+                self.pos += 1;
+                return Some(ExprTok::Op(CmpOp::Lt));
+            }
+            b'>' => {
+                self.pos += 1;
+                return Some(ExprTok::Op(CmpOp::Gt));
+            }
+            _ => {}
+        }
+        // String literal.
+        if b == b'"' || b == b'\'' {
+            return self.scan_string(b);
+        }
+        // Number literal (optionally signed).
+        if b == b'-' || b.is_ascii_digit() {
+            return self.scan_number();
+        }
+        // Path / keyword.
+        if is_ident_start(b) {
+            return self.scan_path_or_keyword();
+        }
+        // Unknown byte — let the parser flag it via a None / consume
+        // loop. Advance so we don't spin forever.
+        self.pos += 1;
+        None
+    }
+
+    fn scan_string(&mut self, quote: u8) -> Option<ExprTok> {
+        self.pos += 1; // consume opening quote
+        let start = self.pos;
+        while self.pos < self.bytes.len()
+            && self.bytes[self.pos] != quote
+        {
+            self.pos += 1;
+        }
+        let raw = &self.bytes[start..self.pos];
+        // Skip closing quote (or accept end-of-input as unterminated).
+        if self.pos < self.bytes.len() {
+            self.pos += 1;
+        }
+        Some(ExprTok::String(String::from_utf8_lossy(raw).into_owned()))
+    }
+
+    fn scan_number(&mut self) -> Option<ExprTok> {
+        let start = self.pos;
+        if self.bytes[self.pos] == b'-' {
+            self.pos += 1;
+        }
+        while self.pos < self.bytes.len()
+            && self.bytes[self.pos].is_ascii_digit()
+        {
+            self.pos += 1;
+        }
+        let raw = std::str::from_utf8(&self.bytes[start..self.pos])
+            .ok()?
+            .parse::<i64>()
+            .ok()?;
+        Some(ExprTok::Number(raw))
+    }
+
+    fn scan_path_or_keyword(&mut self) -> Option<ExprTok> {
+        let start = self.pos;
+        while self.pos < self.bytes.len()
+            && is_ident_continue(self.bytes[self.pos])
+        {
+            self.pos += 1;
+        }
+        let raw = std::str::from_utf8(&self.bytes[start..self.pos])
+            .ok()?
+            .to_string();
+        Some(match raw.as_str() {
+            "true" => ExprTok::True,
+            "false" => ExprTok::False,
+            "null" => ExprTok::Null,
+            _ => ExprTok::Path(raw),
+        })
+    }
+}
+
+fn is_ident_start(b: u8) -> bool {
+    matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'@')
+}
+
+fn is_ident_continue(b: u8) -> bool {
+    is_ident_start(b) || matches!(b, b'0'..=b'9' | b'.')
+}
+
+// ─── End expression module ─────────────────────────────────────────
 
 /// Parses a `name = literal` assignment used by `{{#set}}`. The literal
 /// follows the same grammar as a partial parameter value: quoted string,
@@ -2004,6 +2317,147 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, "color=blue size=M ");
+    }
+
+    #[test]
+    fn if_compares_numbers_with_gt_lt_eq() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("count".to_string(), 7);
+
+        for (expr, expected) in [
+            ("count > 5", "yes"),
+            ("count >= 7", "yes"),
+            ("count < 5", "no"),
+            ("count <= 6", "no"),
+            ("count == 7", "yes"),
+            ("count != 7", "no"),
+        ] {
+            let tpl = format!(
+                "{{{{#if {expr}}}}}yes{{{{else}}}}no{{{{/if}}}}"
+            );
+            let out = engine.render_template(&tpl, &ctx).unwrap();
+            assert_eq!(out, expected, "expr `{expr}`");
+        }
+    }
+
+    #[test]
+    fn if_compares_string_literals() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("role".to_string(), "admin".to_string());
+        let out = engine
+            .render_template(
+                r#"{{#if role == "admin"}}A{{else}}U{{/if}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "A");
+
+        let out = engine
+            .render_template(
+                r#"{{#if role != "guest"}}A{{else}}U{{/if}}"#,
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "A");
+    }
+
+    #[test]
+    fn if_compares_two_paths() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("a".to_string(), 5);
+        ctx.set_value("b".to_string(), 5);
+        let out = engine
+            .render_template("{{#if a == b}}eq{{else}}ne{{/if}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "eq");
+    }
+
+    #[test]
+    fn if_orders_strings_lexically() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("a".to_string(), "apple".to_string());
+        ctx.set("b".to_string(), "banana".to_string());
+        let out = engine
+            .render_template("{{#if a < b}}lt{{else}}ge{{/if}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "lt");
+    }
+
+    #[test]
+    fn if_bare_path_keeps_truthiness_semantics() {
+        // Backwards-compat: `{{#if x}}` without an operator still
+        // evaluates to truthy / falsy.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("on".to_string(), true);
+        ctx.set_value("off".to_string(), false);
+        ctx.set_value("zero".to_string(), 0);
+        ctx.set_value("seven".to_string(), 7);
+
+        for (expr, expected) in [
+            ("on", "Y"),
+            ("off", "N"),
+            ("zero", "N"),
+            ("seven", "Y"),
+            ("missing", "N"),
+        ] {
+            let tpl =
+                format!("{{{{#if {expr}}}}}Y{{{{else}}}}N{{{{/if}}}}");
+            assert_eq!(
+                engine.render_template(&tpl, &ctx).unwrap(),
+                expected,
+                "expr `{expr}`",
+            );
+        }
+    }
+
+    #[test]
+    fn if_ordered_compare_on_mixed_types_errors() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("count".to_string(), 7);
+        ctx.set("name".to_string(), "Ada".to_string());
+        let err = engine
+            .render_template("{{#if count > name}}x{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::InvalidTemplate(msg) if msg.contains("must be numbers or both strings"),
+        ));
+    }
+
+    #[test]
+    fn if_eq_works_across_types_via_structural_equality() {
+        // Eq/Ne don't require type matching — true vs 1 are simply
+        // unequal under structural Value equality.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("on".to_string(), true);
+        let out = engine
+            .render_template(
+                "{{#if on == 1}}same{{else}}diff{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "diff");
+    }
+
+    #[test]
+    fn if_compares_against_null_literal() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("x".to_string(), crate::context::Value::Null);
+        let out = engine
+            .render_template(
+                "{{#if x == null}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
     }
 
     #[test]
