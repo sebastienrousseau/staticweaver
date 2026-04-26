@@ -72,30 +72,131 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![format!("raw = {out}")]
     });
 
+    // ── Template Partials ───────────────────────────────────────────
+    let partial_dir = TempDir::new()?;
+    let header_path = partial_dir.path().join("header.html");
+    fs::write(&header_path, "Welcome, {{name}}!")?;
+
+    let partial_engine = Engine::new(
+        partial_dir.path().to_str().unwrap(),
+        Duration::from_secs(60),
+    );
+    let mut partial_ctx = Context::new();
+    partial_ctx.set("name".to_string(), "Alice".to_string());
+
+    let partial_out = support::task("Render with a partial", || {
+        partial_engine
+            .render_template("Header: {{> header}}", &partial_ctx)
+            .expect("render should succeed")
+    });
+    support::task_with_output("Inspect the partial output", || {
+        vec![format!("partial = {partial_out:?}")]
+    });
+
+    // ── Built-in Filters ────────────────────────────────────────────
+    let mut filter_ctx = Context::new();
+    filter_ctx.set("title".to_string(), " staticweaver ".to_string());
+    filter_ctx.set(
+        "long_text".to_string(),
+        "This is a very long string that will be truncated".to_string(),
+    );
+
+    support::task_with_output(
+        "Apply filters: trim | uppercase",
+        || {
+            let out = engine
+                .render_template(
+                    "Title: {{ title | trim | uppercase }}",
+                    &filter_ctx,
+                )
+                .expect("render");
+            vec![format!("filtered = {out:?}")]
+        },
+    );
+
+    support::task_with_output("Apply filters: truncate", || {
+        let out = engine
+            .render_template(
+                "Text: {{ long_text | truncate }}",
+                &filter_ctx,
+            )
+            .expect("render");
+        vec![format!("truncated = {out:?}")]
+    });
+
+    // ── Control Flow & Nested Data ──────────────────────────────────
+    let mut flow_ctx = Context::new();
+    flow_ctx.set_value("show_it".to_string(), true);
+    flow_ctx.set_value("items".to_string(), vec!["apple", "banana"]);
+    flow_ctx.set_value("user".to_string(), {
+        let mut m = fnv::FnvHashMap::default();
+        let _ = m.insert(
+            "name".to_string(),
+            staticweaver::context::Value::from("Ada"),
+        );
+        staticweaver::context::Value::Map(m)
+    });
+
+    support::task_with_output(
+        "Render nested data: `{{user.name}}`",
+        || {
+            let out = engine
+                .render_template("Hello, {{user.name}}!", &flow_ctx)
+                .expect("render");
+            vec![format!("dot_notation = {out:?}")]
+        },
+    );
+
+    support::task_with_output(
+        "Control flow: `{{#if}}`, `{{#each}}`",
+        || {
+            let template = "
+{{#if show_it}}
+List:
+{{#each items}} - {{this}}
+{{/each}}
+{{else}}
+Hidden
+{{/if}}";
+            let out = engine
+                .render_template(template, &flow_ctx)
+                .expect("render");
+            vec!["result:".to_string(), out.trim().to_string()]
+        },
+    );
+
     // ── File-backed render_page ─────────────────────────────────────
     let temp_dir = TempDir::new()?;
-    let template_path = temp_dir.path().join("layout.html");
-    fs::write(
-        &template_path,
-        "<html><body>{{!content}}</body></html>",
-    )?;
+    let layout_dir = temp_dir.path().join("blog");
+    fs::create_dir_all(&layout_dir)?;
+    let template_path = layout_dir.join("post.html");
+    fs::write(&template_path, "<h1>{{title}}</h1>")?;
     let mut page_engine = Engine::new(
         temp_dir.path().to_str().unwrap(),
         Duration::from_secs(60),
     );
     let mut page_ctx = Context::new();
-    page_ctx.set(
-        "content".to_string(),
-        "Welcome to StaticWeaver".to_string(),
-    );
+    page_ctx
+        .set("title".to_string(), "Subdirectory support".to_string());
 
-    let page = support::task("Render a page from disk", || {
-        page_engine
-            .render_page(&page_ctx, "layout")
-            .expect("render_page should succeed")
-    });
+    let page =
+        support::task("Render a page from a subdirectory", || {
+            page_engine
+                .render_page(&page_ctx, "blog/post")
+                .expect("render_page should succeed")
+        });
     support::task_with_output("Inspect the rendered page", || {
         vec![format!("page = {page}")]
+    });
+
+    // ── HTML Escape Toggle ──────────────────────────────────────────
+    let raw_engine = Engine::new("", Duration::from_secs(60))
+        .with_html_escape(false);
+    support::task_with_output("Disable HTML escaping globally", || {
+        let out = raw_engine
+            .render_template("User: {{user}}", &html_ctx)
+            .expect("render");
+        vec![format!("raw_global = {out}")]
     });
 
     // ── Path traversal is rejected ──────────────────────────────────
@@ -127,16 +228,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // ── Cache management ────────────────────────────────────────────
-    let mut cached_engine =
-        Engine::new("templates", Duration::from_secs(60));
-    let ctx = Context::new();
+    let mut cached_engine = Engine::new(
+        temp_dir.path().to_str().unwrap(),
+        Duration::from_secs(60),
+    );
     support::task_with_output(
         "Cache fills on repeated renders",
         || {
-            // render_template itself does not touch the page cache; use it to
-            // show the render path, then populate the cache via render_page.
-            let _ = cached_engine.render_template("static", &ctx);
-            let _ = cached_engine.render_template("static", &ctx);
+            // render_page populates the cache
+            let _ = cached_engine.render_page(&page_ctx, "blog/post");
+            let _ = cached_engine.render_page(&page_ctx, "blog/post");
             vec![format!(
                 "render_cache.len = {}",
                 cached_engine.render_cache.len()
@@ -154,6 +255,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    support::summary(11);
+    support::summary(18);
     Ok(())
 }

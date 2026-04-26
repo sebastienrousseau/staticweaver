@@ -55,6 +55,47 @@ fn main() {
         ]
     });
 
+    // ── Typed Values ────────────────────────────────────────────────
+    let mut typed = Context::new();
+    support::task("Insert typed values", || {
+        typed.set_value("active".to_string(), true);
+        typed.set_value("count".to_string(), 42);
+        typed.set_value("tags".to_string(), vec!["rust", "ssg"]);
+    });
+
+    support::task_with_output("Read typed values", || {
+        vec![
+            format!("active = {:?}", typed.get_value("active")),
+            format!("count  = {:?}", typed.get_value("count")),
+            format!(
+                "truthy? = {}",
+                typed
+                    .get_value("active")
+                    .map_or(false, |v| v.is_truthy())
+            ),
+        ]
+    });
+
+    // ── Nested Data & Paths ─────────────────────────────────────────
+    let mut nested = Context::new();
+    support::task("Insert nested Map", || {
+        let mut user = fnv::FnvHashMap::default();
+        let _ = user.insert("name".to_string(), "Ada".into());
+        let _ = user.insert("role".to_string(), "Admin".into());
+        nested.set_value(
+            "user".to_string(),
+            staticweaver::context::Value::Map(user),
+        );
+    });
+
+    support::task_with_output("Resolve paths: `user.name`", || {
+        vec![
+            format!("name = {:?}", nested.get_path("user.name")),
+            format!("role = {:?}", nested.get_path("user.role")),
+            format!("miss = {:?}", nested.get_path("user.age")),
+        ]
+    });
+
     // ── Iteration ───────────────────────────────────────────────────
     let mut people = Context::new();
     people.set("name".to_string(), "Bob".to_string());
@@ -94,5 +135,5 @@ fn main() {
         },
     );
 
-    support::summary(8);
+    support::summary(12);
 }

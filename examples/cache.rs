@@ -56,18 +56,25 @@ fn main() {
     // ── Bounded capacity ────────────────────────────────────────────
     let mut bounded: Cache<String, String> =
         Cache::with_capacity(Duration::from_secs(60), 2);
-    support::task("Cap capacity at 2 entries", || {
+    support::task("Cap capacity at 2 entries (LRU eviction)", || {
         let _ = bounded.insert("k1".to_string(), "v1".to_string());
         let _ = bounded.insert("k2".to_string(), "v2".to_string());
-        // Third insert is silently dropped because the cap is reached.
+        // Touching k1 promotes it
+        let _ = bounded.get(&"k1".to_string());
+        // Third insert evicts the LRU entry (k2)
         let _ = bounded.insert("k3".to_string(), "v3".to_string());
     });
-    support::task_with_output("Inspect stored keys", || {
-        let mut pairs: Vec<_> =
-            bounded.iter().map(|(k, v)| format!("{k} = {v}")).collect();
-        pairs.sort();
-        pairs
-    });
+    support::task_with_output(
+        "Inspect stored keys (k2 should be gone)",
+        || {
+            let mut pairs: Vec<_> = bounded
+                .iter()
+                .map(|(k, v)| format!("{k} = {v}"))
+                .collect();
+            pairs.sort();
+            pairs
+        },
+    );
 
     // ── Refresh + update ────────────────────────────────────────────
     let mut refreshable: Cache<String, String> =
