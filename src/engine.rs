@@ -1198,14 +1198,17 @@ fn url_encode(input: &str) -> String {
 // ─── Expression module ─────────────────────────────────────────────
 //
 // Tiny recursive-descent grammar used by `{{#if EXPR}}` (and, in later
-// phases, by other tag types). C1 added comparison operators; C2 layers
-// on boolean operators with conventional precedence (NOT > AND > OR):
+// phases, by other tag types). C1 added comparison operators; C2 layered
+// on boolean operators; C3 layers on integer math with `*`/`/` binding
+// tighter than `+`/`-`, both binding tighter than comparisons:
 //
 //   expr       := bool_or
 //   bool_or    := bool_and ( "or" bool_and )*
 //   bool_and   := bool_not ( "and" bool_not )*
 //   bool_not   := "not" bool_not | comparison
-//   comparison := operand ( ("==" | "!=" | "<" | "<=" | ">" | ">=") operand )?
+//   comparison := add_expr ( ("==" | "!=" | "<" | "<=" | ">" | ">=") add_expr )?
+//   add_expr   := mul_expr ( ("+" | "-") mul_expr )*
+//   mul_expr   := operand ( ("*" | "/") operand )*
 //   operand    := path | literal
 //   literal    := STRING | NUMBER | "true" | "false" | "null"
 //   path       := IDENT ("." IDENT)*
@@ -1217,6 +1220,11 @@ fn url_encode(input: &str) -> String {
 // `and` / `or` / `not` are reserved when they appear as standalone
 // identifiers; dotted paths (e.g. `user.notes`) are unaffected because
 // the tokenizer only matches the keyword as a complete identifier.
+//
+// Math is integer-only (the only numeric variant `Value` carries is
+// `i64`). Mixed-type math (`5 + "x"`) and division by zero return
+// `InvalidTemplate` errors so authors get a clear message instead of
+// a panic or a silent NaN.
 
 #[derive(Debug, Clone, PartialEq)]
 enum CmpOp {
@@ -1228,11 +1236,20 @@ enum CmpOp {
     Ge,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum MathOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
 #[derive(Debug, Clone)]
 enum Expr {
     Path(String),
     Literal(crate::context::Value),
     Compare(Box<Expr>, CmpOp, Box<Expr>),
+    Math(Box<Expr>, MathOp, Box<Expr>),
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
@@ -1258,6 +1275,11 @@ impl Expr {
                 let l = lhs.eval(ctx)?;
                 let r = rhs.eval(ctx)?;
                 Value::Bool(apply_cmp(op, &l, &r)?)
+            }
+            Expr::Math(lhs, op, rhs) => {
+                let l = lhs.eval(ctx)?;
+                let r = rhs.eval(ctx)?;
+                Value::Number(apply_math(op, &l, &r)?)
             }
             // Boolean operators short-circuit: avoid evaluating the
             // right operand when the left already decides the result.
@@ -1323,6 +1345,57 @@ fn apply_cmp(
     }
 }
 
+/// Applies an integer math op. Both operands must be `Value::Number`;
+/// any other combination errors out so authors don't get silent
+/// coercion. Division by zero returns an `InvalidTemplate` error
+/// rather than panicking.
+fn apply_math(
+    op: &MathOp,
+    lhs: &crate::context::Value,
+    rhs: &crate::context::Value,
+) -> Result<i64, EngineError> {
+    use crate::context::Value;
+    let (a, b) = match (lhs, rhs) {
+        (Value::Number(a), Value::Number(b)) => (*a, *b),
+        _ => {
+            return Err(EngineError::InvalidTemplate(format!(
+                "math operator requires two numbers, got \
+                 {lhs:?} and {rhs:?}"
+            )));
+        }
+    };
+    match op {
+        MathOp::Add => a.checked_add(b).ok_or_else(|| {
+            EngineError::InvalidTemplate(format!(
+                "integer overflow in {a} + {b}"
+            ))
+        }),
+        MathOp::Sub => a.checked_sub(b).ok_or_else(|| {
+            EngineError::InvalidTemplate(format!(
+                "integer overflow in {a} - {b}"
+            ))
+        }),
+        MathOp::Mul => a.checked_mul(b).ok_or_else(|| {
+            EngineError::InvalidTemplate(format!(
+                "integer overflow in {a} * {b}"
+            ))
+        }),
+        MathOp::Div => {
+            if b == 0 {
+                Err(EngineError::InvalidTemplate(
+                    "division by zero".to_string(),
+                ))
+            } else {
+                a.checked_div(b).ok_or_else(|| {
+                    EngineError::InvalidTemplate(format!(
+                        "integer overflow in {a} / {b}"
+                    ))
+                })
+            }
+        }
+    }
+}
+
 /// Tokenizer + parser entry point. Walks `s` once; whitespace
 /// separates tokens but is otherwise insignificant.
 fn parse_expr(s: &str) -> Result<Expr, EngineError> {
@@ -1375,18 +1448,52 @@ fn parse_bool_not(
 fn parse_comparison(
     tokens: &mut ExprTokens<'_>,
 ) -> Result<Expr, EngineError> {
-    let lhs = parse_operand(tokens)?;
+    let lhs = parse_add_expr(tokens)?;
     let op = match tokens.peek() {
         Some(ExprTok::Op(op)) => Some(op.clone()),
         _ => None,
     };
     if let Some(op) = op {
         let _ = tokens.next();
-        let rhs = parse_operand(tokens)?;
+        let rhs = parse_add_expr(tokens)?;
         Ok(Expr::Compare(Box::new(lhs), op, Box::new(rhs)))
     } else {
         Ok(lhs)
     }
+}
+
+fn parse_add_expr(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    let mut lhs = parse_mul_expr(tokens)?;
+    loop {
+        let op = match tokens.peek() {
+            Some(ExprTok::Plus) => MathOp::Add,
+            Some(ExprTok::Minus) => MathOp::Sub,
+            _ => break,
+        };
+        let _ = tokens.next();
+        let rhs = parse_mul_expr(tokens)?;
+        lhs = Expr::Math(Box::new(lhs), op, Box::new(rhs));
+    }
+    Ok(lhs)
+}
+
+fn parse_mul_expr(
+    tokens: &mut ExprTokens<'_>,
+) -> Result<Expr, EngineError> {
+    let mut lhs = parse_operand(tokens)?;
+    loop {
+        let op = match tokens.peek() {
+            Some(ExprTok::Star) => MathOp::Mul,
+            Some(ExprTok::Slash) => MathOp::Div,
+            _ => break,
+        };
+        let _ = tokens.next();
+        let rhs = parse_operand(tokens)?;
+        lhs = Expr::Math(Box::new(lhs), op, Box::new(rhs));
+    }
+    Ok(lhs)
 }
 
 fn parse_operand(
@@ -1421,17 +1528,26 @@ enum ExprTok {
     And,
     Or,
     Not,
+    Plus,
+    Minus,
+    Star,
+    Slash,
 }
 
 /// Single-pass tokenizer. Tokens are produced lazily via `next` /
 /// `peek`; we cache one token of lookahead so the parser stays
 /// straight-line. Errors surface as `InvalidTemplate` immediately on
 /// the offending byte rather than waiting until parse-time.
+///
+/// `prev_was_operand` disambiguates `-`: when the previous emitted
+/// token was an operand (path, literal, closing of a value), `-` is a
+/// binary `Minus` operator; otherwise it starts a negative number
+/// literal. This lets `5 - 3` and `-3` both parse correctly.
 struct ExprTokens<'a> {
     bytes: &'a [u8],
     pos: usize,
     peeked: Option<ExprTok>,
-    consumed_peek: bool,
+    prev_was_operand: bool,
 }
 
 impl<'a> ExprTokens<'a> {
@@ -1440,23 +1556,32 @@ impl<'a> ExprTokens<'a> {
             bytes: s.as_bytes(),
             pos: 0,
             peeked: None,
-            consumed_peek: false,
+            prev_was_operand: false,
         }
     }
 
     fn peek(&mut self) -> Option<&ExprTok> {
         if self.peeked.is_none() {
+            // Capture the current operand-state so the lookahead
+            // reflects the parser's true position. peek does not
+            // commit, so we must restore on next() emit.
+            let saved = self.prev_was_operand;
             self.peeked = self.scan_one();
+            self.prev_was_operand = saved;
         }
         self.peeked.as_ref()
     }
 
     fn next(&mut self) -> Option<ExprTok> {
-        if let Some(tok) = self.peeked.take() {
-            self.consumed_peek = true;
-            return Some(tok);
+        let tok = if let Some(tok) = self.peeked.take() {
+            Some(tok)
+        } else {
+            self.scan_one()
+        };
+        if let Some(t) = &tok {
+            self.prev_was_operand = is_operand_tok(t);
         }
-        self.scan_one()
+        tok
     }
 
     fn scan_one(&mut self) -> Option<ExprTok> {
@@ -1495,6 +1620,27 @@ impl<'a> ExprTokens<'a> {
             b'>' => {
                 self.pos += 1;
                 return Some(ExprTok::Op(CmpOp::Gt));
+            }
+            _ => {}
+        }
+        // Math operators. `-` is binary only when an operand just
+        // closed; otherwise it's the sign on a numeric literal.
+        match b {
+            b'+' => {
+                self.pos += 1;
+                return Some(ExprTok::Plus);
+            }
+            b'*' => {
+                self.pos += 1;
+                return Some(ExprTok::Star);
+            }
+            b'/' => {
+                self.pos += 1;
+                return Some(ExprTok::Slash);
+            }
+            b'-' if self.prev_was_operand => {
+                self.pos += 1;
+                return Some(ExprTok::Minus);
             }
             _ => {}
         }
@@ -1577,6 +1723,23 @@ fn is_ident_start(b: u8) -> bool {
 
 fn is_ident_continue(b: u8) -> bool {
     is_ident_start(b) || matches!(b, b'0'..=b'9' | b'.')
+}
+
+/// Whether `tok` is an operand-shaped token. Used by the tokenizer to
+/// decide if `-` should start a negative number literal (when the
+/// previous token was *not* an operand) or be a binary subtraction
+/// (when it was). Keywords like `true`/`false`/`null` count too —
+/// they're literals.
+fn is_operand_tok(tok: &ExprTok) -> bool {
+    matches!(
+        tok,
+        ExprTok::Path(_)
+            | ExprTok::Number(_)
+            | ExprTok::String(_)
+            | ExprTok::True
+            | ExprTok::False
+            | ExprTok::Null
+    )
 }
 
 // ─── End expression module ─────────────────────────────────────────
@@ -2730,6 +2893,183 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, "yes");
+    }
+
+    // ── Phase C3: integer math operators ───────────────────────────
+
+    #[test]
+    fn if_compares_addition_against_threshold() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "n".to_string(),
+            crate::context::Value::Number(8),
+        );
+        let out = engine
+            .render_template(
+                "{{#if n + 2 == 10}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_subtracts_two_paths() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "a".to_string(),
+            crate::context::Value::Number(20),
+        );
+        ctx.set_value(
+            "b".to_string(),
+            crate::context::Value::Number(7),
+        );
+        let out = engine
+            .render_template(
+                "{{#if a - b > 10}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_respects_mul_over_add_precedence() {
+        // 2 + 3 * 4 must equal 14, not 20.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#if 2 + 3 * 4 == 14}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_evaluates_left_associatively_for_subtraction() {
+        // 10 - 3 - 2 must equal 5, not 9.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#if 10 - 3 - 2 == 5}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_does_integer_division_truncating_toward_zero() {
+        // 7 / 2 == 3 (integer), not 3.5.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#if 7 / 2 == 3}}yes{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_division_by_zero_errors_cleanly() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "z".to_string(),
+            crate::context::Value::Number(0),
+        );
+        let err = engine
+            .render_template("{{#if 5 / z == 0}}x{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("division by zero"),
+            "expected division-by-zero error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn if_math_on_non_numbers_errors_cleanly() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "name".to_string(),
+            crate::context::Value::String("Ada".into()),
+        );
+        let err = engine
+            .render_template("{{#if name + 1 == 1}}x{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("math operator requires"),
+            "expected math-type error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn if_negative_literal_still_parses() {
+        // `-3` after `>` (a non-operand token) should tokenize as a
+        // negative number literal, not as `Minus, 3`.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "n".to_string(),
+            crate::context::Value::Number(-5),
+        );
+        let out = engine
+            .render_template("{{#if n < -3}}yes{{else}}no{{/if}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "yes");
+    }
+
+    #[test]
+    fn if_math_chains_with_boolean_ops() {
+        // Math < comparisons < booleans in precedence.
+        // `(a + b) > 10 and (c * 2) <= 8`
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "a".to_string(),
+            crate::context::Value::Number(7),
+        );
+        ctx.set_value(
+            "b".to_string(),
+            crate::context::Value::Number(5),
+        );
+        ctx.set_value(
+            "c".to_string(),
+            crate::context::Value::Number(3),
+        );
+        let out = engine
+            .render_template(
+                "{{#if a + b > 10 and c * 2 <= 8}}\
+                 ok{{else}}no{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "ok");
+    }
+
+    #[test]
+    fn if_integer_overflow_errors_cleanly() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value(
+            "max".to_string(),
+            crate::context::Value::Number(i64::MAX),
+        );
+        let err = engine
+            .render_template("{{#if max + 1 == 0}}x{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(
+            format!("{err:?}").contains("integer overflow"),
+            "expected overflow error, got: {err:?}"
+        );
     }
 
     #[test]
