@@ -19,10 +19,11 @@
 
 use askama::Template;
 use criterion::{
-    black_box, criterion_group, criterion_main, BenchmarkId, Criterion,
+    criterion_group, criterion_main, BenchmarkId, Criterion,
 };
 use minijinja::Environment;
 use staticweaver::{Context as SwContext, Engine as SwEngine};
+use std::hint::black_box;
 use std::time::Duration;
 use tera::{Context as TeraContext, Tera};
 

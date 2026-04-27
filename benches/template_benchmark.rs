@@ -11,10 +11,9 @@
 //!   * `context_hash_100_keys`        - exercises `Context::hash`
 //!   * `render_template_32_tags`      - exercises the scan loop
 
-use criterion::{
-    black_box, criterion_group, criterion_main, Criterion,
-};
+use criterion::{criterion_group, criterion_main, Criterion};
 use staticweaver::{Context, Engine};
+use std::hint::black_box;
 use std::time::Duration;
 
 /// The template string used for the baseline bench.
