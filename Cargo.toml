@@ -128,7 +128,7 @@ askama_escape = "0.10"
 # reqwest powers the optional remote-template fetcher. Gated behind the
 # `remote-templates` feature so the core crate has no networking code in
 # its default build. rustls + native-roots avoids pulling OpenSSL.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "rustls-native-certs"], optional = true }
 
 # axum + tokio: only used by examples/axum.rs, gated behind the
 # `axum-example` feature. Adds zero weight to the default library
