@@ -84,6 +84,60 @@ cross-platform matrix on Linux + macOS + Windows.
   callers override the historical six-filename set.
 - **Stray closing tags** or `{{else}}` outside a block produce a
   clear `InvalidTemplate` error.
+- **String concat operator `~`** in expressions —
+  `{{#if name ~ " Lovelace" == "Ada Lovelace"}}…{{/if}}`. Lower
+  precedence than math, higher than comparisons. Tera/Twig style.
+  All operands coerce via `Display` (Number → `"5"`, Null → `""`).
+- **Loop control: `{{#break}}` / `{{#continue}}`** inside `#each`.
+  Bubble through nested `#if` / `#block` until the enclosing
+  `#each` catches them. Partials and the top-level renderer
+  swallow the signal so they remain self-contained.
+- **Range iteration in `#each`** — `{{#each START..END}}` (END
+  exclusive). Both bounds are full expressions, so paths and
+  arithmetic both work: `{{#each 0..items.length}}` and
+  `{{#each 0..n + 1}}`. Loop helpers (`@index`, etc.) bind the
+  same way as for List/Map iteration.
+- **`{{ super() }}` in inherited blocks** — child overrides can
+  include the parent block's body. Renders through the full
+  pipeline (escape, filters, dot-paths). Outside an override
+  context, `super()` is a silent no-op. Does not leak across
+  partial boundaries.
+- **Custom filters API** — `Engine::add_filter(name, FilterFn)`
+  registers a `Fn(&str, &[String]) -> Result<String, EngineError>`
+  closure. Custom filters override built-ins of the same name.
+- **Custom tests API** — `Engine::add_test(name, TestFn)`
+  registers an `Fn(&Value, &[String]) -> Result<bool, EngineError>`
+  closure. Custom tests override built-in `defined`/`empty`/`none`
+  of the same name.
+- **`TemplateLoader` trait** for pluggable template backends.
+  Built-in `FsLoader` (default) and `MemoryLoader` (for tests /
+  embedded assets). New `Engine::with_loader(Arc<dyn …>, ttl)`
+  constructor lets callers plug in custom backends.
+- **Per-extension auto-escape policy** — `engine.autoescape_on(
+  &[".html", ".xml"])` makes `render_page` auto-escape only
+  layouts whose name ends with one of the listed suffixes.
+  Matches Tera's behaviour. `render_template` (no layout name)
+  is unaffected.
+- **Stream rendering** — `render_to<W: io::Write>(template, ctx,
+  &mut writer)` and `render_page_to<W: io::Write>(ctx, layout,
+  &mut writer)` write directly into any `io::Write` sink. Saves
+  the `String → Vec<u8>` conversion in HTTP / file workflows.
+- **Line:column in error messages** — every user-facing error from
+  `render_template` / `render_page` now carries
+  `at line N, column M`. Pointer-arithmetic on slices into the
+  original template; works for the main template, partials, and
+  inherited base files.
+- **15 new built-in filters**: `abs`, `round`, `ceil`, `floor`,
+  `number_format` (configurable thousands separator), `repeat`,
+  `reverse`, `slice` (Unicode-aware), `pad_start`, `pad_end`,
+  `contains`, `starts_with`, `ends_with`. Plus `json` (under
+  `--features json`, pulls `serde_json`) for `{{ data | json |
+  safe }}`-style state embedding into HTML/JS.
+- **CLI binary** — `cargo install staticweaver` now produces a
+  `staticweaver` executable. Hand-rolled arg parsing (no `clap`
+  dep). Usage: `staticweaver render <template> [--set k=v ...]
+  [--no-escape]`. Reads templates from a file path or stdin
+  (`-`).
 
 ### Added — tooling, governance, and CI
 
@@ -104,8 +158,29 @@ cross-platform matrix on Linux + macOS + Windows.
   fans every PR to macOS + Windows runners. Multi-OS `verify` job
   in `release.yml`.
 - **Coverage gate** — `coverage-gate` CI job fails the build if
-  line coverage drops below 95%. `make coverage` produces the same
-  report locally.
+  line coverage drops below **98%**. Achieved 98.6% lines /
+  98.4% functions / 98.2% regions across all source files.
+  `make coverage` produces the same report locally.
+- **Property-based robustness tests** —
+  `tests/proptest_parser.rs` runs 256 random cases across 6
+  properties (~1500 inputs per `cargo test`) asserting the
+  engine never panics on arbitrary input — only returns clean
+  `EngineError`s.
+- **Differential tests vs Minijinja** —
+  `tests/differential.rs` renders the same logical
+  template+context through both engines and asserts byte-for-byte
+  identical output across substitution, escape, if/else, each,
+  filters, and dot-path lookups.
+- **CLI smoke tests** — `tests/cli_smoke.rs` spawns the
+  `staticweaver` binary and exercises every flag (file path,
+  stdin, `--set`, `--no-escape`, `--help`, `--version`) plus
+  the error paths (missing template, malformed `--set`, render
+  errors, unknown subcommand). 10 tests.
+- **Axum integration example** — `examples/axum.rs` (gated
+  behind `axum-example`) boots a minimal HTTP server
+  demonstrating render-to-`Html<String>`, render-to-`Vec<u8>`
+  via `render_to`, and per-request context from path
+  parameters.
 - **Mock-server integration tests** — 6 new tests in
   `tests/download_tests.rs` covering the remote-templates HTTP path
   (happy path, 404, bad `Content-Type`, oversized `Content-Length`,

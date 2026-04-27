@@ -116,22 +116,27 @@ assert_eq!(
 
 ## Overview
 
-StaticWeaver is a small templating engine for Rust. It substitutes `{{name}}` tags against a `Context`, evaluates control-flow blocks and a small expression language, walks template inheritance chains, and writes the result back as a `String`. It is designed to be **safe by default, cacheable, and dependency-light**: most templating crates pick one of those — staticweaver picks all three.
+StaticWeaver is a small templating engine for Rust. It substitutes `{{name}}` tags against a `Context`, evaluates control-flow blocks and a small expression language, walks template inheritance chains (with `{{ super() }}` support), and writes the result back as a `String` or any `io::Write` sink. It is designed to be **safe by default, cacheable, and dependency-light**: most templating crates pick one of those — staticweaver picks all three.
 
-- **HTML-escaped by default** -- `&<>"'` in context values become entities; `{{!key}}` opts out per tag
-- **Polymorphic context** -- `Value` enum (`Null` / `Bool` / `Number` / `String` / `List` / `Map`) with dot-notation lookup (`{{user.email}}`, `{{items.0}}`)
-- **Control flow** -- `{{#if EXPR}}` / `{{else}}` / `{{/if}}` and `{{#each list}}` with `@index` / `@first` / `@last` / `@key` helpers
-- **Expression language** -- comparisons, boolean operators (`and` / `or` / `not`), integer math, postfix tests (`is defined` / `is empty` / `is none`)
-- **Partials and inheritance** -- `{{> name}}` partials with parameters, and `{{#extends "base"}}` + `{{#block "name"}}` for layout reuse
-- **Filters** -- `{{ x | trim | uppercase }}`, `{{ bio | truncate:140 }}`, with a built-in set covering `uppercase` / `lowercase` / `trim` / `truncate` / `capitalize` / `length` / `default` / `replace` / `urlencode` / `safe`
-- **Path-validated `render_page`** -- rejects `..`, `/`, `\`, null bytes in layout names
-- **`#![forbid(unsafe_code)]`** -- enforced at the crate root
-- **LRU cache** -- generic `Cache<K, V>` with optional capacity bound and true LRU eviction on overflow
-- **Custom delimiters** -- swap `{{ }}` for any pair at runtime
-- **Opt-in networking** -- remote template fetch lives behind the `remote-templates` cargo feature
-- **Bounded HTTP** -- remote fetches cap bodies at 1 MiB with a 10 s timeout
-- **Pure Rust** -- no C bindings, no FFI, no build script
-- **MSRV 1.68** -- stable Rust only
+- **HTML-escape by default** with SIMD entity encoding via `askama_escape`. Per-tag opt-out (`{{!key}}`), global opt-out (`with_html_escape(false)`), and per-extension policy (`autoescape_on(&[".html"])`).
+- **Polymorphic context** -- `Value` enum (`Null` / `Bool` / `Number` / `String` / `List` / `Map`) with dot-notation lookup (`{{user.email}}`, `{{items.0}}`).
+- **Control flow** -- `{{#if EXPR}}` / `{{else}}` / `{{/if}}`, `{{#each list}}` (also `{{#each 1..N}}` for ranges), `{{#break}}` / `{{#continue}}`, `@index` / `@first` / `@last` / `@key` helpers.
+- **Expression language** -- comparisons, boolean operators (`and` / `or` / `not`), integer math, string concat (`~`), postfix tests (`is defined` / `is empty` / `is none`).
+- **Partials and inheritance** -- `{{> name}}` partials with parameters; `{{#extends "base"}}` + `{{#block "name"}}` for layout reuse; `{{ super() }}` to include the parent block body inside an override.
+- **23 built-in filters** -- `uppercase`, `lowercase`, `trim`, `truncate`, `capitalize`, `length`, `default`, `replace`, `urlencode`, `safe`, `abs`, `round`, `ceil`, `floor`, `number_format`, `repeat`, `reverse`, `slice`, `pad_start`, `pad_end`, `contains`, `starts_with`, `ends_with`. `json` available under `--features json`.
+- **Extension surface** -- `Engine::add_filter("name", Arc::new(…))` registers custom filters, `Engine::add_test("name", Arc::new(…))` registers custom predicates for `is X`. Custom override built-ins.
+- **Pluggable template loaders** -- `TemplateLoader` trait with `FsLoader` (default) and `MemoryLoader` (testing/embedded). Plug in your own backend via `Engine::with_loader`.
+- **Stream rendering** -- `Engine::render_to(template, ctx, &mut writer)` writes directly to any `io::Write` sink (HTTP response body, file, channel).
+- **Line:column in error messages** -- `Unresolved template tag: missing at line 2, column 9` instead of bare messages.
+- **Path-validated `render_page`** -- rejects `..`, `/`, `\`, null bytes in layout names.
+- **CLI binary** -- `staticweaver render hello.html --set name=Ada` for shell-side testing.
+- **`#![forbid(unsafe_code)]`** -- enforced at the crate root.
+- **LRU cache** -- generic `Cache<K, V>` with optional capacity bound and true LRU eviction on overflow.
+- **Custom delimiters** -- swap `{{ }}` for any pair at runtime.
+- **Opt-in networking** -- remote template fetch lives behind the `remote-templates` cargo feature.
+- **Bounded HTTP** -- remote fetches cap bodies at 1 MiB with a 10 s timeout.
+- **Pure Rust** -- no C bindings, no FFI, no build script.
+- **MSRV 1.68** -- stable Rust only.
 
 ---
 
@@ -142,12 +147,20 @@ StaticWeaver is a small templating engine for Rust. It substitutes `{{name}}` ta
 | `#![forbid(unsafe_code)]` | yes | no | no | no |
 | MSRV 1.68 | yes | newer | newer | newer |
 | HTML-escape by default | yes | yes | yes | yes |
-| Template inheritance | yes | yes | partials only | yes |
-| Built-in filter pipeline | yes | yes | helpers only | yes |
+| Template inheritance + `super()` | yes | yes | partials only | yes |
+| Built-in filter pipeline | yes (23 filters) | yes | helpers only | yes |
+| Custom filters + tests at runtime | yes | yes | yes | yes |
+| Pluggable template loader | yes | partial | yes | yes |
+| Stream rendering (`io::Write`) | yes | yes | yes | yes |
+| Line:column in error messages | yes | yes | partial | yes |
+| Range iteration (`{{#each 1..N}}`) | yes | yes | no | yes |
+| `#break` / `#continue` in loops | yes | yes | no | yes |
+| CLI binary | yes | no | no | partial |
+| Property-based + differential tests | yes | no | no | no |
 | Async runtime required | no | no | no | no |
 | Networking in default build | no | no | no | no |
 
-If you need a **full sandboxed expression language with custom tests, async, or i18n**, pick Tera. If you need the **smallest possible substituter with HTML safety, inheritance, and zero `unsafe`**, pick staticweaver.
+If you need a **full sandboxed expression language with custom tests, async, or i18n**, pick Tera. If you need a **bytecode VM for the hottest loop workloads**, pick Minijinja. If you need the **smallest possible safe Rust templating engine** with zero `unsafe`, SIMD escape that matches Askama, and full Tera-tier ergonomics, pick staticweaver.
 
 ---
 
@@ -163,10 +176,13 @@ If you need a **full sandboxed expression language with custom tests, async, or 
 | Whitespace control | `{{- key -}}` | strips adjacent whitespace |
 | If / else | `{{#if EXPR}}…{{else}}…{{/if}}` | `{{#if user.admin}}` |
 | Each | `{{#each list}}…{{/each}}` | `{{#each items}}{{this}}{{/each}}` |
+| Each (range) | `{{#each START..END}}…{{/each}}` | `{{#each 1..10}}{{this}}{{/each}}` |
 | Each helpers | `@index`, `@first`, `@last`, `@key` | `{{#each users}}{{@index}}: {{this.name}}{{/each}}` |
+| Loop control | `{{#break}}` / `{{#continue}}` | exit / skip current iteration |
 | Partials | `{{> name}}` | `{{> header}}` |
 | Partial parameters | `{{> name k=v}}` | `{{> button label="Save"}}` |
 | Inheritance | `{{#extends "base"}}` + `{{#block "x"}}…{{/block}}` | child overrides named blocks |
+| `super()` in override | `{{ super() }}` | include parent block body |
 | Set | `{{#set x = LITERAL}}` | `{{#set tier = "pro"}}` |
 | Filters | `{{ x \| filter \| filter:arg }}` | `{{ name \| trim \| uppercase }}` |
 | Backslash-escape delimiter | `\{{literal}}` | emits `{{literal}}` verbatim |
@@ -180,7 +196,8 @@ The `{{#if EXPR}}` block accepts a small recursive-descent expression language. 
 | Comparison | `==`, `!=`, `<`, `<=`, `>`, `>=` |
 | Boolean | `and`, `or`, `not` (short-circuiting) |
 | Math (integer) | `+`, `-`, `*`, `/` (checked; division-by-zero returns `InvalidTemplate`) |
-| Postfix tests | `is defined`, `is empty`, `is none` (negate with `is not`) |
+| String concat | `~` (Tera/Twig style) — `name ~ " Lovelace"` |
+| Postfix tests | `is defined`, `is empty`, `is none` (negate with `is not`); register your own with `Engine::add_test` |
 
 ```text
 {{#if user.email is defined and user.email is not empty}}
@@ -198,18 +215,22 @@ A bare path like `{{#if user}}` keeps its truthiness semantics — it evaluates 
 
 | | |
 | :--- | :--- |
-| **Rendering** | `render_template(&str, &Context)` for in-memory strings, `render_page(&Context, layout)` for a `.html` file inside `template_path`. Both return `Result<String, EngineError>`. |
-| **Context** | Polymorphic `Value` enum (`Null` / `Bool` / `Number` / `String` / `List` / `Map`). `set` / `get` for legacy strings; `set_value` / `get_value` for typed inserts (`Into<Value>` for `String`, `&str`, `bool`, `i32`, `i64`, `Vec<V>`); `get_path` for dot-notation walks (`user.email`, `items.0`). `iter`, `clear`, `with_capacity`, and a stable `hash()` for cache-key construction. |
-| **HTML escape** | On by default. Five entities replaced (`& < > " '`). Per-tag opt-out: `{{!body}}`. Global opt-out: `Engine::new(...).with_html_escape(false)`. |
-| **Control flow** | `{{#if EXPR}}…{{else}}…{{/if}}` and `{{#each list}}…{{/each}}` with `@index`, `@first`, `@last`, `@key` loop helpers and `Map` iteration. |
-| **Expressions** | Recursive-descent parser inside `#if`: comparisons (`==` `!=` `<` `<=` `>` `>=`), boolean ops (`and` `or` `not`, short-circuiting), integer math (`+` `-` `*` `/`, checked arithmetic), postfix tests (`is defined`, `is empty`, `is none`, with `is not` negation). |
-| **Partials & inheritance** | `{{> name}}` partials with `{{> name k=v}}` parameters and a depth-10 recursion guard; `{{#extends "base"}}` + `{{#block "name"}}…{{/block}}` for multi-level inheritance, child wins on conflicts. |
-| **Filters** | Pipeline syntax `{{ x | f | g:arg }}`. Built-in: `uppercase`, `lowercase`, `trim`, `truncate`, `capitalize`, `length`, `default`, `replace`, `urlencode`, `safe`. |
+| **Rendering** | `render_template(&str, &Context)` and `render_page(&Context, layout)` return `Result<String, EngineError>`; `render_to<W: io::Write>(template, ctx, &mut writer)` and `render_page_to<W: io::Write>(ctx, layout, &mut writer)` stream into any sink (HTTP body, file, channel). |
+| **Context** | Polymorphic `Value` enum (`Null` / `Bool` / `Number` / `String` / `List` / `Map`). `set` / `get` for legacy strings; `set_value` / `set_value_str` / `set_value_string` / `get_value` for typed inserts (`Into<Value>` for `String`, `&str`, `bool`, `i32`, `i64`, `Vec<V>`); `get_path` for dot-notation walks (`user.email`, `items.0`). `iter`, `clear`, `with_capacity`, and a stable `hash()` for cache-key construction. |
+| **HTML escape** | SIMD entity encoding via `askama_escape` (5-character OWASP set: `& < > " '`). On by default. Per-tag opt-out: `{{!body}}` or trailing ` \| safe` filter. Global opt-out: `Engine::new(...).with_html_escape(false)`. Per-extension policy: `engine.autoescape_on(&[".html", ".xml"])`. |
+| **Control flow** | `{{#if EXPR}}…{{else}}…{{/if}}` and `{{#each list}}…{{/each}}` with `@index`, `@first`, `@last`, `@key` loop helpers, `Map` iteration, range form (`{{#each START..END}}`), and `{{#break}}` / `{{#continue}}` early-exit tags. |
+| **Expressions** | Recursive-descent parser inside `#if`: comparisons (`==` `!=` `<` `<=` `>` `>=`), boolean ops (`and` `or` `not`, short-circuiting), integer math (`+` `-` `*` `/`, checked arithmetic), string concat (`~`), postfix tests (`is defined`, `is empty`, `is none`, with `is not` negation; user-extensible via `Engine::add_test`). |
+| **Partials & inheritance** | `{{> name}}` partials with `{{> name k=v}}` parameters and a depth-10 recursion guard; `{{#extends "base"}}` + `{{#block "name"}}…{{/block}}` for multi-level inheritance (child wins on conflicts), with `{{ super() }}` to include the parent block body inside an override. |
+| **Filters** | Pipeline syntax `{{ x \| f \| g:arg }}`. **23 built-in filters**: `uppercase`, `lowercase`, `trim`, `truncate`, `capitalize`, `length`, `default`, `replace`, `urlencode`, `safe`, `abs`, `round`, `ceil`, `floor`, `number_format`, `repeat`, `reverse`, `slice`, `pad_start`, `pad_end`, `contains`, `starts_with`, `ends_with`. `json` available under `--features json`. Register your own via `Engine::add_filter("name", Arc::new(…))`. |
+| **Custom tests** | `Engine::add_test("admin", Arc::new(\|v, args\| Ok(…)))` registers user predicates for `is X` / `is not X`. Custom tests override built-in `defined`/`empty`/`none` of the same name. |
+| **Template loaders** | `TemplateLoader` trait with built-in `FsLoader` (default) and `MemoryLoader` (testing/embedded assets). Plug in your own backend via `Engine::with_loader(Arc::new(MyLoader), ttl)`. |
 | **In-template assignment** | `{{#set name = LITERAL}}` binds locally without leaking to the parent scope. |
 | **Delimiters** | `set_delimiters(open, close)` swaps `{{` / `}}` for any pair. Whitespace around keys is trimmed (`{{ name }}` == `{{name}}`). Whitespace control via `{{- key -}}`. Backslash-escape via `\{{literal}}`. |
 | **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. **True LRU eviction** on overflow — `Cache::get` (now `&mut self`) bumps access recency. Methods: `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. |
 | **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-tls-native-roots`. The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
-| **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). `TemplateError` with `#[from]` conversions for `io::Error` and `reqwest::Error`. |
+| **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). All user-facing messages carry `at line N, column M` for source positions. `TemplateError` with `#[from]` conversions for `io::Error` and `reqwest::Error`. |
+| **CLI** | `cargo install staticweaver` ships a `staticweaver` binary: `staticweaver render <template> [--set k=v ...] [--no-escape]`. Reads templates from a file path or stdin (`-`). |
+| **Robustness** | proptest harness (256 random cases × 6 properties = ~1500 inputs per `cargo test`) proving the engine never panics on arbitrary input. Differential tests against Minijinja anchor the shared-syntax contract. |
 | **`cargo deny`** | `advisories`, `bans`, `licenses`, `sources` all pass. Yanked crates denied. |
 
 ---
