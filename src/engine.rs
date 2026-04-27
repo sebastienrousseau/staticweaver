@@ -1679,10 +1679,93 @@ fn apply_filter(
                 args.first().map(String::as_str).unwrap_or(",");
             number_format(&input, sep)
         }
+        // String filters. Complement the case-folding / trimming
+        // set with shape-changing transforms.
+        "repeat" => {
+            let n: usize = args
+                .first()
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| {
+                    EngineError::Render(
+                        "repeat filter requires a positive integer arg"
+                            .to_string(),
+                    )
+                })?;
+            Ok(input.repeat(n))
+        }
+        "reverse" => Ok(input.chars().rev().collect()),
+        "slice" => {
+            // slice:start,end — Unicode-aware character slicing.
+            let start: usize = args
+                .first()
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| {
+                    EngineError::Render(
+                        "slice filter requires start as the first arg"
+                            .to_string(),
+                    )
+                })?;
+            let end: Option<usize> =
+                args.get(1).and_then(|s| s.parse().ok());
+            let chars: Vec<char> = input.chars().collect();
+            let from = start.min(chars.len());
+            let to = end.unwrap_or(chars.len()).min(chars.len());
+            Ok(chars[from..to.max(from)].iter().collect())
+        }
+        "pad_start" => pad(&input, args, true),
+        "pad_end" => pad(&input, args, false),
+        // Boolean-shaped filters: emit "true" or "false". Most
+        // useful for direct substitution (e.g. emitting a CSS
+        // class conditionally) — for `#if EXPR` you want the
+        // built-in `is X` tests or a registered custom test.
+        "contains" => Ok(args
+            .first()
+            .map(|n| input.contains(n.as_str()).to_string())
+            .unwrap_or_else(|| "false".to_string())),
+        "starts_with" => Ok(args
+            .first()
+            .map(|n| input.starts_with(n.as_str()).to_string())
+            .unwrap_or_else(|| "false".to_string())),
+        "ends_with" => Ok(args
+            .first()
+            .map(|n| input.ends_with(n.as_str()).to_string())
+            .unwrap_or_else(|| "false".to_string())),
         unknown => Err(EngineError::Render(format!(
             "Unknown filter: {unknown}"
         ))),
     }
+}
+
+/// Pads `s` with `pad_char` (default `' '`) up to `width`
+/// characters. `left = true` pads on the left (right-align);
+/// `false` pads on the right (left-align). Already-long inputs
+/// are returned unchanged.
+fn pad(
+    s: &str,
+    args: &[String],
+    left: bool,
+) -> Result<String, EngineError> {
+    let width: usize =
+        args.first().and_then(|s| s.parse().ok()).ok_or_else(|| {
+            EngineError::Render(
+                "pad filter requires width as the first arg"
+                    .to_string(),
+            )
+        })?;
+    let pad_char =
+        args.get(1).and_then(|c| c.chars().next()).unwrap_or(' ');
+    let len = s.chars().count();
+    if len >= width {
+        return Ok(s.to_string());
+    }
+    let needed = width - len;
+    let pad: String =
+        std::iter::repeat(pad_char).take(needed).collect();
+    Ok(if left {
+        format!("{pad}{s}")
+    } else {
+        format!("{s}{pad}")
+    })
 }
 
 /// Parses `input` as `f64`, applies `op`, formats the result. If
@@ -3826,6 +3909,186 @@ mod tests {
             matches!(err, EngineError::InvalidTemplate(_)),
             "got {err:?}"
         );
+    }
+
+    // ── G2: String filters ─────────────────────────────────────────
+
+    #[test]
+    fn filter_repeat_repeats_string_n_times() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("c".to_string(), "ab".to_string());
+        let out =
+            engine.render_template("{{ c | repeat:3 }}", &ctx).unwrap();
+        assert_eq!(out, "ababab");
+    }
+
+    #[test]
+    fn filter_repeat_zero_returns_empty() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("c".to_string(), "x".to_string());
+        let out =
+            engine.render_template("{{ c | repeat:0 }}", &ctx).unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn filter_repeat_errors_without_arg() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("c".to_string(), "x".to_string());
+        let err = engine
+            .render_template("{{ c | repeat }}", &ctx)
+            .unwrap_err();
+        assert!(format!("{err}").contains("repeat"), "{err}");
+    }
+
+    #[test]
+    fn filter_reverse_unicode_aware() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "café".to_string());
+        let out =
+            engine.render_template("{{ s | reverse }}", &ctx).unwrap();
+        assert_eq!(out, "éfac");
+    }
+
+    #[test]
+    fn filter_slice_with_start_and_end() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "abcdef".to_string());
+        let out = engine
+            .render_template("{{ s | slice:1,4 }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "bcd");
+    }
+
+    #[test]
+    fn filter_slice_with_only_start() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "abcdef".to_string());
+        let out =
+            engine.render_template("{{ s | slice:2 }}", &ctx).unwrap();
+        assert_eq!(out, "cdef");
+    }
+
+    #[test]
+    fn filter_slice_clamps_oversize_indices() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "ab".to_string());
+        let out = engine
+            .render_template("{{ s | slice:100,200 }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn filter_slice_errors_without_start() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "ab".to_string());
+        let err = engine
+            .render_template("{{ s | slice }}", &ctx)
+            .unwrap_err();
+        assert!(format!("{err}").contains("slice"), "{err}");
+    }
+
+    #[test]
+    fn filter_pad_start_right_aligns_with_spaces() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "42".to_string());
+        let out = engine
+            .render_template("{{ s | pad_start:5 }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "   42");
+    }
+
+    #[test]
+    fn filter_pad_end_left_aligns_with_custom_char() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "x".to_string());
+        let out = engine
+            .render_template(r#"{{ s | pad_end:4,"." }}"#, &ctx)
+            .unwrap();
+        assert_eq!(out, "x...");
+    }
+
+    #[test]
+    fn filter_pad_returns_input_unchanged_when_already_long() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "abcdef".to_string());
+        let out = engine
+            .render_template("{{ s | pad_start:3 }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "abcdef");
+    }
+
+    #[test]
+    fn filter_pad_errors_without_width() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "x".to_string());
+        let err = engine
+            .render_template("{{ s | pad_start }}", &ctx)
+            .unwrap_err();
+        assert!(format!("{err}").contains("pad"), "{err}");
+    }
+
+    #[test]
+    fn filter_contains_emits_true_or_false() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "hello world".to_string());
+        let yes = engine
+            .render_template(r#"{{ s | contains:"world" }}"#, &ctx)
+            .unwrap();
+        assert_eq!(yes, "true");
+        let no = engine
+            .render_template(r#"{{ s | contains:"xyz" }}"#, &ctx)
+            .unwrap();
+        assert_eq!(no, "false");
+    }
+
+    #[test]
+    fn filter_starts_with_and_ends_with() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "abc".to_string());
+        assert_eq!(
+            engine
+                .render_template(r#"{{ s | starts_with:"a" }}"#, &ctx)
+                .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            engine
+                .render_template(r#"{{ s | ends_with:"c" }}"#, &ctx)
+                .unwrap(),
+            "true"
+        );
+        assert_eq!(
+            engine
+                .render_template(r#"{{ s | starts_with:"z" }}"#, &ctx)
+                .unwrap(),
+            "false"
+        );
+    }
+
+    #[test]
+    fn filter_contains_no_arg_returns_false() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "abc".to_string());
+        let out =
+            engine.render_template("{{ s | contains }}", &ctx).unwrap();
+        assert_eq!(out, "false");
     }
 
     // ── G1: Loop break / continue ─────────────────────────────────
