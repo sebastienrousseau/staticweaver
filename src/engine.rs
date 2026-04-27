@@ -105,6 +105,36 @@ pub type FilterFn = Arc<
         + Sync,
 >;
 
+/// Signature of a user-registered test, as accepted by
+/// [`Engine::add_test`]. The test receives the operand value the
+/// `is X` predicate is applied to and any extra arguments, and
+/// returns a boolean (or an `EngineError` for malformed inputs).
+/// Custom tests override built-ins (`defined`, `empty`, `none`) of
+/// the same name.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::engine::{Engine, TestFn};
+/// use staticweaver::context::Value;
+/// use std::sync::Arc;
+/// use std::time::Duration;
+///
+/// let is_admin: TestFn = Arc::new(|v: &Value, _args: &[String]| {
+///     Ok(matches!(v, Value::String(s) if s == "admin"))
+/// });
+/// let mut engine = Engine::new("", Duration::from_secs(60));
+/// engine.add_test("admin", is_admin);
+/// ```
+pub type TestFn = Arc<
+    dyn Fn(
+            &crate::context::Value,
+            &[String],
+        ) -> Result<bool, EngineError>
+        + Send
+        + Sync,
+>;
+
 /// Owned name → body map collected from a child template's
 /// `{{#block "name"}}…{{/block}}` declarations and consumed by the base
 /// template's matching `{{#block "name"}}` tags. Owned strings sidestep
@@ -170,6 +200,11 @@ pub struct Engine {
     /// built-in filter set, so a custom filter can override a
     /// built-in of the same name. Populate via [`Engine::add_filter`].
     pub custom_filters: HashMap<String, FilterFn>,
+    /// User-registered tests keyed by name. Looked up *before* the
+    /// built-in tests (`defined`, `empty`, `none`) so a custom test
+    /// can override a built-in of the same name. Populate via
+    /// [`Engine::add_test`].
+    pub custom_tests: HashMap<String, TestFn>,
 }
 
 // `Engine` is mostly auto-debuggable, but `custom_filters` carries
@@ -186,6 +221,10 @@ impl std::fmt::Debug for Engine {
             .field(
                 "custom_filters",
                 &self.custom_filters.keys().collect::<Vec<_>>(),
+            )
+            .field(
+                "custom_tests",
+                &self.custom_tests.keys().collect::<Vec<_>>(),
             )
             .finish()
     }
@@ -216,6 +255,7 @@ impl Engine {
             close_delim: "}}".to_string(),
             escape_html: true,
             custom_filters: HashMap::new(),
+            custom_tests: HashMap::new(),
         }
     }
 
@@ -253,6 +293,46 @@ impl Engine {
         filter: FilterFn,
     ) -> &mut Self {
         let _ = self.custom_filters.insert(name.to_string(), filter);
+        self
+    }
+
+    /// Registers a custom test under `name`. Custom tests are
+    /// looked up *before* the built-in set (`defined`, `empty`,
+    /// `none`), so registering a name that already exists overrides
+    /// the built-in. Returns `&mut Self` for builder-style chaining.
+    ///
+    /// Used in `#if` block expressions: `{{#if value is X}}…{{/if}}`
+    /// passes `value` and any colon-separated args to the test
+    /// function, which returns a boolean. `is not X` flips the
+    /// result via the same negation pathway that built-ins use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::{Context, Engine};
+    /// use staticweaver::context::Value;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let mut engine = Engine::new("", Duration::from_secs(60));
+    /// engine.add_test(
+    ///     "admin",
+    ///     Arc::new(|v, _args| {
+    ///         Ok(matches!(v, Value::String(s) if s == "admin"))
+    ///     }),
+    /// );
+    /// let mut ctx = Context::new();
+    /// ctx.set("role".to_string(), "admin".to_string());
+    /// let out = engine
+    ///     .render_template(
+    ///         "{{#if role is admin}}Y{{else}}N{{/if}}",
+    ///         &ctx,
+    ///     )
+    ///     .unwrap();
+    /// assert_eq!(out, "Y");
+    /// ```
+    pub fn add_test(&mut self, name: &str, test: TestFn) -> &mut Self {
+        let _ = self.custom_tests.insert(name.to_string(), test);
         self
     }
 
@@ -674,7 +754,7 @@ impl Engine {
                 // and `is_truthy` agrees with it.
                 let cond = parse_expr(arg)
                     .map_err(|e| annotate_pos(e, origin, arg))?
-                    .eval(active)
+                    .eval(active, self)
                     .map_err(|e| annotate_pos(e, origin, arg))?
                     .is_truthy();
                 let chosen = if cond {
@@ -1692,17 +1772,6 @@ enum MathOp {
     Div,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-enum TestKind {
-    /// Path resolves to a defined value (`get_path` returned `Some`).
-    /// Non-path operands return `true` iff the value is not `Null`.
-    Defined,
-    /// Empty string, empty list, empty map, or `Null`.
-    Empty,
-    /// Operand is `Value::Null`.
-    None,
-}
-
 #[derive(Debug, Clone)]
 enum Expr {
     Path(String),
@@ -1716,8 +1785,12 @@ enum Expr {
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
-    /// `lhs is [not] <kind>` — postfix predicate with optional negation.
-    Test(Box<Expr>, TestKind, bool),
+    /// `lhs is [not] <name>` — postfix predicate with optional
+    /// negation. The name is resolved at eval time against
+    /// `Engine::custom_tests` first, then the built-in set
+    /// (`defined`, `empty`, `none`). Deferring resolution lets a
+    /// custom test override a built-in of the same name.
+    Test(Box<Expr>, String, bool),
 }
 
 impl Expr {
@@ -1729,6 +1802,7 @@ impl Expr {
     fn eval(
         &self,
         ctx: &Context,
+        engine: &Engine,
     ) -> Result<crate::context::Value, EngineError> {
         use crate::context::Value;
         Ok(match self {
@@ -1737,13 +1811,13 @@ impl Expr {
             }
             Expr::Literal(v) => v.clone(),
             Expr::Compare(lhs, op, rhs) => {
-                let l = lhs.eval(ctx)?;
-                let r = rhs.eval(ctx)?;
+                let l = lhs.eval(ctx, engine)?;
+                let r = rhs.eval(ctx, engine)?;
                 Value::Bool(apply_cmp(op, &l, &r)?)
             }
             Expr::Math(lhs, op, rhs) => {
-                let l = lhs.eval(ctx)?;
-                let r = rhs.eval(ctx)?;
+                let l = lhs.eval(ctx, engine)?;
+                let r = rhs.eval(ctx, engine)?;
                 Value::Number(apply_math(op, &l, &r)?)
             }
             // String concat. Both sides go through Display, so any
@@ -1751,8 +1825,8 @@ impl Expr {
             // Null renders as "" and List/Map render as "" too,
             // matching the substitution semantics.
             Expr::Concat(lhs, rhs) => {
-                let l = lhs.eval(ctx)?;
-                let r = rhs.eval(ctx)?;
+                let l = lhs.eval(ctx, engine)?;
+                let r = rhs.eval(ctx, engine)?;
                 Value::String(format!("{l}{r}"))
             }
             // Boolean operators short-circuit: avoid evaluating the
@@ -1760,42 +1834,65 @@ impl Expr {
             // This keeps templates cheap when one side does an
             // expensive lookup or comparison.
             Expr::And(lhs, rhs) => {
-                let l = lhs.eval(ctx)?;
+                let l = lhs.eval(ctx, engine)?;
                 if l.is_truthy() {
-                    Value::Bool(rhs.eval(ctx)?.is_truthy())
+                    Value::Bool(rhs.eval(ctx, engine)?.is_truthy())
                 } else {
                     Value::Bool(false)
                 }
             }
             Expr::Or(lhs, rhs) => {
-                let l = lhs.eval(ctx)?;
+                let l = lhs.eval(ctx, engine)?;
                 if l.is_truthy() {
                     Value::Bool(true)
                 } else {
-                    Value::Bool(rhs.eval(ctx)?.is_truthy())
+                    Value::Bool(rhs.eval(ctx, engine)?.is_truthy())
                 }
             }
             Expr::Not(inner) => {
-                Value::Bool(!inner.eval(ctx)?.is_truthy())
+                Value::Bool(!inner.eval(ctx, engine)?.is_truthy())
             }
-            Expr::Test(operand, kind, negated) => {
-                let result = match kind {
-                    // `defined` is special: when the operand is a
-                    // bare path we check for the path's existence
-                    // *without* defaulting to `Null`. For any other
-                    // operand shape we fall back to "not Null".
-                    TestKind::Defined => {
-                        if let Expr::Path(p) = operand.as_ref() {
-                            ctx.get_path(p).is_some()
-                        } else {
-                            !matches!(operand.eval(ctx)?, Value::Null)
+            Expr::Test(operand, name, negated) => {
+                // Test dispatch: custom-tests checked first so a
+                // user can override a built-in of the same name.
+                let result = if let Some(f) =
+                    engine.custom_tests.get(name)
+                {
+                    let value = operand.eval(ctx, engine)?;
+                    f(&value, &[])?
+                } else {
+                    match name.as_str() {
+                        "defined" => {
+                            // `defined` is special: bare path
+                            // operands check for path existence
+                            // without defaulting to Null. Other
+                            // operand shapes reduce to "not Null".
+                            if let Expr::Path(p) = operand.as_ref() {
+                                ctx.get_path(p).is_some()
+                            } else {
+                                !matches!(
+                                    operand.eval(ctx, engine)?,
+                                    Value::Null
+                                )
+                            }
                         }
-                    }
-                    TestKind::Empty => {
-                        is_value_empty(&operand.eval(ctx)?)
-                    }
-                    TestKind::None => {
-                        matches!(operand.eval(ctx)?, Value::Null)
+                        "empty" => {
+                            is_value_empty(&operand.eval(ctx, engine)?)
+                        }
+                        "none" => matches!(
+                            operand.eval(ctx, engine)?,
+                            Value::Null
+                        ),
+                        unknown => {
+                            return Err(EngineError::InvalidTemplate(
+                                format!(
+                                    "unknown test `{unknown}` — \
+                                         expected `defined`, `empty`, \
+                                         `none`, or a name registered \
+                                         via Engine::add_test"
+                                ),
+                            ));
+                        }
                     }
                 };
                 Value::Bool(if *negated { !result } else { result })
@@ -1968,18 +2065,11 @@ fn parse_test_expr(
     if negated {
         let _ = tokens.next(); // consume `not`
     }
-    let kind = match tokens.next() {
-        Some(ExprTok::Path(name)) => match name.as_str() {
-            "defined" => TestKind::Defined,
-            "empty" => TestKind::Empty,
-            "none" => TestKind::None,
-            other => {
-                return Err(EngineError::InvalidTemplate(format!(
-                    "unknown test `{other}` — expected \
-                     `defined`, `empty`, or `none`"
-                )));
-            }
-        },
+    let name = match tokens.next() {
+        // All names defer to eval-time so a custom test can
+        // override a built-in of the same name (matches the
+        // add_filter behaviour). Built-in dispatch lives in eval.
+        Some(ExprTok::Path(name)) => name,
         Some(other) => {
             return Err(EngineError::InvalidTemplate(format!(
                 "expected test name after `is`, got {other:?}"
@@ -1991,7 +2081,7 @@ fn parse_test_expr(
             ));
         }
     };
-    Ok(Expr::Test(Box::new(lhs), kind, negated))
+    Ok(Expr::Test(Box::new(lhs), name, negated))
 }
 
 fn parse_comparison(
@@ -3686,6 +3776,112 @@ mod tests {
             matches!(err, EngineError::InvalidTemplate(_)),
             "got {err:?}"
         );
+    }
+
+    // ── F4: Custom tests API ───────────────────────────────────────
+
+    #[test]
+    fn add_test_registers_custom_predicate() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        let _ = engine.add_test(
+            "admin",
+            Arc::new(|v, _args| {
+                Ok(matches!(v, crate::context::Value::String(s) if s == "admin"))
+            }),
+        );
+        let mut ctx = Context::new();
+        ctx.set("role".to_string(), "admin".to_string());
+        let out = engine
+            .render_template(
+                "{{#if role is admin}}Y{{else}}N{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "Y");
+
+        ctx.set("role".to_string(), "guest".to_string());
+        let out = engine
+            .render_template(
+                "{{#if role is admin}}Y{{else}}N{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "N");
+    }
+
+    #[test]
+    fn add_test_supports_is_not_negation() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        let _ = engine.add_test(
+            "even",
+            Arc::new(|v, _args| match v {
+                crate::context::Value::Number(n) => Ok(n % 2 == 0),
+                _ => Ok(false),
+            }),
+        );
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 3i64);
+        let out = engine
+            .render_template(
+                "{{#if n is not even}}odd{{else}}even{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "odd");
+    }
+
+    #[test]
+    fn add_test_unknown_name_still_errors() {
+        // After F4, unknown test names defer to eval. If they're
+        // not registered there either, eval surfaces the error.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "1".to_string());
+        let err = engine
+            .render_template("{{#if x is missing}}y{{/if}}", &ctx)
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unknown test"), "{msg}");
+        assert!(msg.contains("missing"), "{msg}");
+    }
+
+    #[test]
+    fn add_test_overrides_builtin_with_same_name() {
+        // Override `defined` to always return false — proves
+        // the custom-tests lookup happens BEFORE built-in dispatch.
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        let _ =
+            engine.add_test("defined", Arc::new(|_v, _args| Ok(false)));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "y".to_string());
+        let out = engine
+            .render_template(
+                "{{#if x is defined}}Y{{else}}N{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "N");
+    }
+
+    #[test]
+    fn add_test_propagates_user_errors() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("", Duration::from_secs(60));
+        let _ = engine.add_test(
+            "boom",
+            Arc::new(|_v, _args| {
+                Err(EngineError::Render("test exploded".to_string()))
+            }),
+        );
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "y".to_string());
+        let err = engine
+            .render_template("{{#if x is boom}}y{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(format!("{err}").contains("test exploded"), "{err}");
     }
 
     // ── F3: Number formatting filters ─────────────────────────────
