@@ -70,6 +70,11 @@ remote-templates = ["dep:reqwest"]          # Fetch templates over HTTP/S via cr
 #   cargo run --example axum --features axum-example
 axum-example = ["dep:axum", "dep:tokio"]
 
+# Enables the `{{ value | json }}` filter for serialising context
+# values as JSON. Pulls serde_json — kept opt-in so dep-light
+# default builds stay dep-light.
+json = ["dep:serde_json"]
+
 # -----------------------------------------------------------------------------
 # Development Dependencies
 # -----------------------------------------------------------------------------
@@ -120,6 +125,10 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 # build because they're optional dependencies.
 axum = { version = "0.7", optional = true }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"], optional = true }
+
+# serde_json: only used by the `json` filter, gated behind the
+# `json` feature. Default build has no JSON dep.
+serde_json = { version = "1", optional = true }
 
 # tempfile is used to create temporary directories for the remote-template
 # fetcher. Still needed at runtime for the feature-gated download path.

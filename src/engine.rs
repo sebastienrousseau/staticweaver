@@ -1388,6 +1388,16 @@ impl Engine {
                 .map_or(false, |(name, _)| name == "safe");
 
             for (name, args) in &filters {
+                // The `json` filter (feature `json`) needs the
+                // structured Value, not its Display string — so for
+                // non-primitive types (List/Map) we'd otherwise see
+                // an empty input. Special-case it at the head of
+                // the dispatch chain.
+                #[cfg(feature = "json")]
+                if name == "json" {
+                    rendered = json_encode_value(value)?;
+                    continue;
+                }
                 // Custom filters take precedence over built-ins, so a
                 // user can override e.g. `uppercase` with their own
                 // locale-aware implementation.
@@ -2032,6 +2042,49 @@ fn apply_filter(
 /// characters. `left = true` pads on the left (right-align);
 /// `false` pads on the right (left-align). Already-long inputs
 /// are returned unchanged.
+/// Serialises a `Value` as JSON via `serde_json`. Used by the
+/// `json` filter (feature-gated). Required because the standard
+/// filter pipeline operates on `String`, which would lose any
+/// `List` / `Map` structure (those Display as the empty string).
+#[cfg(feature = "json")]
+#[cfg_attr(docsrs, doc(cfg(feature = "json")))]
+fn json_encode_value(
+    v: &crate::context::Value,
+) -> Result<String, EngineError> {
+    let json = value_to_serde_json(v);
+    serde_json::to_string(&json)
+        .map_err(|e| EngineError::Render(format!("json filter: {e}")))
+}
+
+#[cfg(feature = "json")]
+#[cfg_attr(docsrs, doc(cfg(feature = "json")))]
+fn value_to_serde_json(v: &crate::context::Value) -> serde_json::Value {
+    use crate::context::Value;
+    match v {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Number(n) => {
+            serde_json::Value::Number(serde_json::Number::from(*n))
+        }
+        Value::String(s) => serde_json::Value::String(s.clone()),
+        Value::List(items) => serde_json::Value::Array(
+            items.iter().map(value_to_serde_json).collect(),
+        ),
+        Value::Map(map) => {
+            let mut obj = serde_json::Map::new();
+            // Sort keys for deterministic output — matches the
+            // ordering the engine uses everywhere else (Map iter
+            // is unspecified for FnvHashMap).
+            let mut keyed: Vec<_> = map.iter().collect();
+            keyed.sort_by(|a, b| a.0.cmp(b.0));
+            for (k, val) in keyed {
+                let _ = obj.insert(k.clone(), value_to_serde_json(val));
+            }
+            serde_json::Value::Object(obj)
+        }
+    }
+}
+
 fn pad(
     s: &str,
     args: &[String],
@@ -4201,6 +4254,86 @@ mod tests {
             matches!(err, EngineError::InvalidTemplate(_)),
             "got {err:?}"
         );
+    }
+
+    // ── H6: json encode filter (feature-gated) ────────────────────
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn filter_json_encodes_strings() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada \"the\" Lovelace".to_string());
+        let out = engine
+            .render_template("{{ name | json | safe }}", &ctx)
+            .unwrap();
+        assert_eq!(out, r#""Ada \"the\" Lovelace""#);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn filter_json_encodes_numbers_and_bools() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 42i64);
+        ctx.set_value("ok".to_string(), true);
+        let n_out =
+            engine.render_template("{{ n | json }}", &ctx).unwrap();
+        assert_eq!(n_out, "42");
+        let b_out =
+            engine.render_template("{{ ok | json }}", &ctx).unwrap();
+        assert_eq!(b_out, "true");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn filter_json_encodes_lists() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["alpha", "beta"]);
+        let out = engine
+            .render_template("{{ items | json | safe }}", &ctx)
+            .unwrap();
+        assert_eq!(out, r#"["alpha","beta"]"#);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn filter_json_encodes_nested_maps_with_sorted_keys() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        let mut user: fnv::FnvHashMap<String, crate::context::Value> =
+            fnv::FnvHashMap::default();
+        let _ = user.insert(
+            "z_last".to_string(),
+            crate::context::Value::Number(2),
+        );
+        let _ = user.insert(
+            "a_first".to_string(),
+            crate::context::Value::Number(1),
+        );
+        ctx.set_value(
+            "user".to_string(),
+            crate::context::Value::Map(user),
+        );
+        let out = engine
+            .render_template("{{ user | json | safe }}", &ctx)
+            .unwrap();
+        // Keys must be in sorted order for deterministic output.
+        assert_eq!(out, r#"{"a_first":1,"z_last":2}"#);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn filter_json_encodes_null_for_unset_path() {
+        // Substituting a missing key normally errors, so test json
+        // on an explicit Null value.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("x".to_string(), crate::context::Value::Null);
+        let out =
+            engine.render_template("{{ x | json }}", &ctx).unwrap();
+        assert_eq!(out, "null");
     }
 
     // ── H5: Range iteration in #each ──────────────────────────────

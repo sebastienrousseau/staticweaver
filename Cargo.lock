@@ -1829,6 +1829,7 @@ dependencies = [
  "mockito",
  "proptest",
  "reqwest",
+ "serde_json",
  "tempfile",
  "tera",
  "thiserror",
