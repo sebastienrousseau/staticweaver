@@ -57,6 +57,16 @@ name = "staticweaver"                   # Internal name of the library
 path = "src/lib.rs"                     # Path to the library entry point
 
 # -----------------------------------------------------------------------------
+# Binary
+# -----------------------------------------------------------------------------
+[[bin]]
+# Lightweight CLI for rendering templates from the shell. Hand-rolled
+# arg parsing — no clap dep — so `cargo install staticweaver`
+# produces a small, dep-light binary alongside the library.
+name = "staticweaver"
+path = "src/bin/staticweaver.rs"
+
+# -----------------------------------------------------------------------------
 # Features
 # -----------------------------------------------------------------------------
 [features]
