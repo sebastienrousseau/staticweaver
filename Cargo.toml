@@ -90,6 +90,11 @@ tera = { version = "1", default-features = false }
 minijinja = "2"
 askama = "0.12"
 
+# proptest powers the random-template robustness suite in
+# tests/proptest_parser.rs — every parser code path must NEVER panic
+# on arbitrary input, only return a clean EngineError.
+proptest = "1"
+
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
