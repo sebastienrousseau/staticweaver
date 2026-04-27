@@ -355,6 +355,14 @@ pub struct Engine {
     /// [`Engine::with_loader`] for in-memory or custom-backend
     /// templates.
     pub loader: Arc<dyn TemplateLoader>,
+    /// File extensions (e.g. `.html`, `.xml`) for which
+    /// [`Engine::render_page`] auto-escapes substitutions.
+    /// Empty (default) = use the global `escape_html` setting
+    /// uniformly. When non-empty, layouts whose name ends with one
+    /// of these extensions auto-escape; everything else renders
+    /// raw. Matches Tera's per-extension autoescape behaviour.
+    /// Populate via [`Engine::autoescape_on`].
+    pub autoescape_extensions: Vec<String>,
 }
 
 // `Engine` is mostly auto-debuggable, but `custom_filters` carries
@@ -378,6 +386,7 @@ impl std::fmt::Debug for Engine {
             )
             // dyn-trait field — Debug just shows the placeholder.
             .field("loader", &"<dyn TemplateLoader>")
+            .field("autoescape_extensions", &self.autoescape_extensions)
             .finish()
     }
 }
@@ -411,6 +420,7 @@ impl Engine {
             loader: Arc::new(FsLoader::new(PathBuf::from(
                 template_path,
             ))),
+            autoescape_extensions: Vec::new(),
         }
     }
 
@@ -463,7 +473,50 @@ impl Engine {
             custom_filters: HashMap::new(),
             custom_tests: HashMap::new(),
             loader,
+            autoescape_extensions: Vec::new(),
         }
+    }
+
+    /// Configures per-extension auto-escape policy for
+    /// [`Engine::render_page`]. When called with a non-empty list,
+    /// `render_page` auto-escapes ONLY for layouts whose name ends
+    /// with one of the listed suffixes; layouts with any other
+    /// extension render raw.
+    ///
+    /// Mirrors Tera's `autoescape_on(vec![".html"])`. The global
+    /// `escape_html` flag still applies to `render_template`
+    /// (which has no layout name to inspect).
+    ///
+    /// Returns `&mut Self` for builder-style chaining.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::{Context, Engine};
+    /// use staticweaver::engine::MemoryLoader;
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("page.html".to_string(), "{{x}}".to_string());
+    /// let _ = store.insert("plain.txt".to_string(), "{{x}}".to_string());
+    /// let mut engine = Engine::with_loader(
+    ///     Arc::new(MemoryLoader::new(store)),
+    ///     Duration::from_secs(60),
+    /// );
+    /// engine.autoescape_on(&[".html"]);
+    /// let mut ctx = Context::new();
+    /// ctx.set("x".to_string(), "<b>".to_string());
+    /// // .html: escaped
+    /// assert_eq!(engine.render_page(&ctx, "page.html").unwrap(), "&lt;b&gt;");
+    /// // .txt: raw
+    /// assert_eq!(engine.render_page(&ctx, "plain.txt").unwrap(), "<b>");
+    /// ```
+    pub fn autoescape_on(&mut self, extensions: &[&str]) -> &mut Self {
+        self.autoescape_extensions =
+            extensions.iter().map(|s| (*s).to_string()).collect();
+        self
     }
 
     /// Registers a custom filter under `name`. Custom filters are
@@ -625,9 +678,28 @@ impl Engine {
         // (defaults to FsLoader rooted at `self.template_path`).
         let template_content = self.loader.load(layout)?;
 
-        // Render the template with the provided context
-        let rendered =
-            self.render_template(&template_content, context)?;
+        // Per-extension auto-escape policy: if the user opted in
+        // via `autoescape_on(&[".html", …])`, the layout's own
+        // extension decides whether substitutions get escaped, not
+        // the global `escape_html` flag. Save / restore the flag
+        // around the render so the engine state stays clean for
+        // subsequent calls (and so render_template — which has no
+        // layout name — continues to use the global setting).
+        let saved_escape = self.escape_html;
+        if !self.autoescape_extensions.is_empty() {
+            self.escape_html = self
+                .autoescape_extensions
+                .iter()
+                .any(|ext| layout.ends_with(ext.as_str()));
+        }
+
+        // Render the template with the provided context.
+        let rendered = self.render_template(&template_content, context);
+
+        // Restore the global flag before propagating the result so
+        // an error mid-render doesn't leak the override.
+        self.escape_html = saved_escape;
+        let rendered = rendered?;
 
         // Cache the rendered result for future use
         let _ = self.render_cache.insert(cache_key, rendered.clone());
@@ -4254,6 +4326,91 @@ mod tests {
             matches!(err, EngineError::InvalidTemplate(_)),
             "got {err:?}"
         );
+    }
+
+    // ── H7: Auto-escape per file extension ────────────────────────
+
+    fn make_engine_with_two_pages() -> Engine {
+        use std::collections::HashMap;
+        let mut store = HashMap::new();
+        let _ =
+            store.insert("page.html".to_string(), "{{x}}".to_string());
+        let _ =
+            store.insert("plain.txt".to_string(), "{{x}}".to_string());
+        Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        )
+    }
+
+    #[test]
+    fn autoescape_on_escapes_for_listed_extension() {
+        let mut engine = make_engine_with_two_pages();
+        let _ = engine.autoescape_on(&[".html"]);
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "<b>".to_string());
+        let out = engine.render_page(&ctx, "page.html").unwrap();
+        assert_eq!(out, "&lt;b&gt;");
+    }
+
+    #[test]
+    fn autoescape_on_skips_unlisted_extension() {
+        let mut engine = make_engine_with_two_pages();
+        let _ = engine.autoescape_on(&[".html"]);
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "<b>".to_string());
+        let out = engine.render_page(&ctx, "plain.txt").unwrap();
+        assert_eq!(out, "<b>");
+    }
+
+    #[test]
+    fn autoescape_on_does_not_change_render_template_behaviour() {
+        // render_template has no layout name; per-extension
+        // policy doesn't apply — the global escape_html still rules.
+        let mut engine = make_engine_with_two_pages();
+        let _ = engine.autoescape_on(&[".html"]);
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "<b>".to_string());
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "&lt;b&gt;");
+    }
+
+    #[test]
+    fn autoescape_global_state_restored_after_render_page() {
+        let mut engine = make_engine_with_two_pages();
+        let _ = engine.autoescape_on(&[".html"]);
+        let saved = engine.escape_html;
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "y".to_string());
+        let _ = engine.render_page(&ctx, "plain.txt").unwrap();
+        assert_eq!(engine.escape_html, saved);
+        let _ = engine.render_page(&ctx, "page.html").unwrap();
+        assert_eq!(engine.escape_html, saved);
+    }
+
+    #[test]
+    fn autoescape_multiple_extensions_match_any() {
+        use std::collections::HashMap;
+        let mut store = HashMap::new();
+        let _ = store.insert("a.html".to_string(), "{{x}}".to_string());
+        let _ = store.insert("b.xml".to_string(), "{{x}}".to_string());
+        let _ = store.insert("c.txt".to_string(), "{{x}}".to_string());
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        );
+        let _ = engine.autoescape_on(&[".html", ".xml"]);
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "<b>".to_string());
+        assert_eq!(
+            engine.render_page(&ctx, "a.html").unwrap(),
+            "&lt;b&gt;"
+        );
+        assert_eq!(
+            engine.render_page(&ctx, "b.xml").unwrap(),
+            "&lt;b&gt;"
+        );
+        assert_eq!(engine.render_page(&ctx, "c.txt").unwrap(), "<b>");
     }
 
     // ── H6: json encode filter (feature-gated) ────────────────────
