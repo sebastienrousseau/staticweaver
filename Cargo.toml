@@ -64,6 +64,12 @@ path = "src/lib.rs"                     # Path to the library entry point
 default = []                                # No default features enabled
 remote-templates = ["dep:reqwest"]          # Fetch templates over HTTP/S via create_template_folder
 
+# Pulls in axum + tokio so `examples/axum.rs` compiles. Opt-in
+# because the underlying deps are heavy and not needed for the
+# library itself. Run with:
+#   cargo run --example axum --features axum-example
+axum-example = ["dep:axum", "dep:tokio"]
+
 # -----------------------------------------------------------------------------
 # Development Dependencies
 # -----------------------------------------------------------------------------
@@ -104,6 +110,12 @@ askama_escape = "0.10"
 # its default build. rustls + native-roots avoids pulling OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"], optional = true }
 
+# axum + tokio: only used by examples/axum.rs, gated behind the
+# `axum-example` feature. Adds zero weight to the default library
+# build because they're optional dependencies.
+axum = { version = "0.7", optional = true }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"], optional = true }
+
 # tempfile is used to create temporary directories for the remote-template
 # fetcher. Still needed at runtime for the feature-gated download path.
 tempfile = "3.13"
@@ -143,6 +155,15 @@ path = "examples/errors.rs"
 # prints a hint telling the user how to enable it.
 name = "remote"
 path = "examples/remote.rs"
+
+[[example]]
+# Drops staticweaver into a minimal Axum web server so the
+# integration recipe is testable end-to-end. Opt-in because axum +
+# tokio are heavy. Run with:
+#   cargo run --example axum --features axum-example
+name = "axum"
+path = "examples/axum.rs"
+required-features = ["axum-example"]
 
 # -----------------------------------------------------------------------------
 # Criterion Benchmark

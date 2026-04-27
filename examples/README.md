@@ -74,6 +74,21 @@ directory before rendering.
 cargo run --example remote --features remote-templates
 ```
 
+### [axum](axum.rs) (Requires `axum-example` feature)
+End-to-end Axum integration. Boots a minimal HTTP server demonstrating
+three patterns:
+- Render to `String` and return as `Html<String>`.
+- Render to `Vec<u8>` via `Engine::render_to` for direct response-body
+  streaming (the same shape works for any `std::io::Write` sink —
+  Actix, Hyper channels, file writers).
+- Per-request context from path parameters, with a custom filter
+  registered via `Engine::add_filter`.
+
+```bash
+cargo run --example axum --features axum-example
+# then open http://127.0.0.1:3030/
+```
+
 ---
 
 ## Example Support
