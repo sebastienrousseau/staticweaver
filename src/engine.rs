@@ -997,37 +997,92 @@ impl Engine {
                         .map_err(|e| {
                             annotate_pos(e, origin, key_trimmed)
                         })?;
-                let target = active.get_path(arg).ok_or_else(|| {
-                    EngineError::Render(format!(
-                        "#each: unresolved list `{arg}`{}",
-                        pos_suffix(origin, arg)
-                    ))
-                })?;
-                // Iterate Lists by position (binds @index/@first/@last)
-                // and Maps by key (also binds @key). Sort Map entries by
-                // key so iteration order is deterministic across runs —
-                // FnvHashMap iteration order is otherwise unspecified.
+
+                // Range form: `#each START..END` (END exclusive).
+                // Both sides are full expressions, so paths and
+                // arithmetic both work: `#each 0..items.length`,
+                // `#each (a)..(b+1)`. The `..` separator is
+                // unambiguous because identifiers can't contain
+                // consecutive dots.
+                let range_items: Option<Vec<crate::context::Value>> =
+                    if let Some((lo_str, hi_str)) = arg.split_once("..")
+                    {
+                        let lo = parse_expr(lo_str.trim())
+                            .map_err(|e| annotate_pos(e, origin, arg))?
+                            .eval(active, self)
+                            .map_err(|e| {
+                                annotate_pos(e, origin, arg)
+                            })?;
+                        let hi = parse_expr(hi_str.trim())
+                            .map_err(|e| annotate_pos(e, origin, arg))?
+                            .eval(active, self)
+                            .map_err(|e| {
+                                annotate_pos(e, origin, arg)
+                            })?;
+                        let (lo_n, hi_n) = match (lo, hi) {
+                            (
+                                crate::context::Value::Number(a),
+                                crate::context::Value::Number(b),
+                            ) => (a, b),
+                            (l, h) => {
+                                return Err(
+                                    EngineError::InvalidTemplate(
+                                        format!(
+                                        "#each range bounds must be \
+                                         numbers, got {l:?}..{h:?}{}",
+                                        pos_suffix(origin, arg)
+                                    ),
+                                    ),
+                                );
+                            }
+                        };
+                        Some(
+                            (lo_n..hi_n)
+                                .map(crate::context::Value::Number)
+                                .collect(),
+                        )
+                    } else {
+                        None
+                    };
+
+                // Iterate Lists by position (binds @index/@first/
+                // @last) and Maps by key (also binds @key). Sort Map
+                // entries by key so iteration order is deterministic
+                // across runs — FnvHashMap iteration order is
+                // otherwise unspecified.
                 let entries: Vec<(
                     Option<String>,
                     &crate::context::Value,
-                )> = match target {
-                    crate::context::Value::List(items) => {
-                        items.iter().map(|v| (None, v)).collect()
-                    }
-                    crate::context::Value::Map(map) => {
-                        let mut keyed: Vec<_> = map.iter().collect();
-                        keyed.sort_by(|a, b| a.0.cmp(b.0));
-                        keyed
-                            .into_iter()
-                            .map(|(k, v)| (Some(k.clone()), v))
-                            .collect()
-                    }
-                    other => {
-                        return Err(EngineError::InvalidTemplate(
+                )> = if let Some(range) = range_items.as_ref() {
+                    range.iter().map(|v| (None, v)).collect()
+                } else {
+                    let target =
+                        active.get_path(arg).ok_or_else(|| {
+                            EngineError::Render(format!(
+                                "#each: unresolved list `{arg}`{}",
+                                pos_suffix(origin, arg)
+                            ))
+                        })?;
+                    match target {
+                        crate::context::Value::List(items) => {
+                            items.iter().map(|v| (None, v)).collect()
+                        }
+                        crate::context::Value::Map(map) => {
+                            let mut keyed: Vec<_> =
+                                map.iter().collect();
+                            keyed.sort_by(|a, b| a.0.cmp(b.0));
+                            keyed
+                                .into_iter()
+                                .map(|(k, v)| (Some(k.clone()), v))
+                                .collect()
+                        }
+                        other => {
+                            return Err(EngineError::InvalidTemplate(
                                 format!(
                                     "#each expects a list or map, got {other:?}"
                                 ),
                             ));
+                        }
                     }
                 };
 
@@ -4146,6 +4201,91 @@ mod tests {
             matches!(err, EngineError::InvalidTemplate(_)),
             "got {err:?}"
         );
+    }
+
+    // ── H5: Range iteration in #each ──────────────────────────────
+
+    #[test]
+    fn each_range_with_integer_literals() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template("{{#each 1..5}}[{{this}}]{{/each}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "[1][2][3][4]");
+    }
+
+    #[test]
+    fn each_range_starts_at_zero() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template("{{#each 0..3}}{{this}}{{/each}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "012");
+    }
+
+    #[test]
+    fn each_range_with_path_bounds() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("lo".to_string(), 2i64);
+        ctx.set_value("hi".to_string(), 6i64);
+        let out = engine
+            .render_template("{{#each lo..hi}}{{this}},{{/each}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "2,3,4,5,");
+    }
+
+    #[test]
+    fn each_range_empty_when_lo_ge_hi() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#each 5..5}}should not appear{{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn each_range_binds_index_and_helpers() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#each 0..3}}@{{@index}}={{this}};{{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "@0=0;@1=1;@2=2;");
+    }
+
+    #[test]
+    fn each_range_with_arithmetic_expression() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 3i64);
+        let out = engine
+            .render_template(
+                "{{#each 0..n + 1}}{{this}}{{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "0123");
+    }
+
+    #[test]
+    fn each_range_errors_on_non_numeric_bounds() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("lo".to_string(), "abc".to_string());
+        let err = engine
+            .render_template("{{#each lo..5}}x{{/each}}", &ctx)
+            .unwrap_err();
+        assert!(format!("{err}").contains("range"), "{err}");
     }
 
     // ── H4: super() in inherited blocks ───────────────────────────
