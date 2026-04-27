@@ -456,19 +456,19 @@ All examples live in `examples/` and use the shared `support.rs` helper for the 
 
 | Workload | staticweaver | Tera | Minijinja | Askama |
 | :--- | ---: | ---: | ---: | ---: |
-| `simple_sub` (1 tag) | **468 ns** | 386 ns | 584 ns | 93 ns |
-| `many_sub_32` (32 tags) | **11.8 µs** | 4.58 µs | 11.24 µs | 830 ns |
-| `escape_heavy` (10 KB, 5% metachar) | **22.8 µs** | 84.2 µs | 23.2 µs | 22.9 µs |
-| `each_100` (100 items) | 54.9 µs | 17.7 µs | 19.3 µs | 5.13 µs |
-| `each_1000` (1000 items) | 535 µs | 171 µs | 178 µs | 48 µs |
-| `if_chain` (nested conditionals) | 2.30 µs | 444 ns | 640 ns | 25 ns |
-| `filter_chain` (`trim \| upper`) | **980 ns** | 618 ns | 976 ns | 197 ns |
+| `simple_sub` (1 tag) | **497 ns** | 388 ns | 591 ns | 95 ns |
+| `many_sub_32` (32 tags) | **12.85 µs** | 5.96 µs | 14.40 µs | 973 ns |
+| `escape_heavy` (10 KB, 5% metachar) | **23.3 µs** | 77.8 µs | 24.3 µs | 23.2 µs |
+| `each_100` (100 items) | 58.3 µs | 17.8 µs | 23.6 µs | 5.24 µs |
+| `each_1000` (1000 items) | 557 µs | 171 µs | 184 µs | 51.9 µs |
+| `if_chain` (nested conditionals) | 2.51 µs | 455 ns | 656 ns | 25.4 ns |
+| `filter_chain` (`trim \| upper`) | **1.03 µs** | 620 ns | 988 ns | 198 ns |
 
-* **Wins or ties Minijinja on 4 / 7 workloads.**
-* **Beats Tera on `escape_heavy` 3.7×.**
-* **Matches Askama on `escape_heavy`** (22.8 µs vs 22.9 µs) — the SIMD escape path holds its own against compile-time codegen on long inputs.
+* **Wins or ties Minijinja on 4 / 7 workloads** (`simple_sub`, `many_sub_32`, `escape_heavy`, `filter_chain`).
+* **Beats Tera on `escape_heavy` 3.3×.**
+* **Matches Askama on `escape_heavy`** (23.3 µs vs 23.2 µs) — the SIMD escape path holds its own against compile-time codegen on long inputs.
 
-The remaining 2.8–3.6× gap on loops and conditional chains is constant-factor per-tag overhead in the runtime AST walker. Closing it would require a bytecode compiler — explicitly rejected to preserve the "small enough to read in an afternoon" pillar.
+The remaining 2.5–3.8× gap on loops and conditional chains is constant-factor per-tag overhead in the runtime AST walker. Closing it would require a bytecode compiler — explicitly rejected to preserve the "small enough to read in an afternoon" pillar.
 
 See [`PERFORMANCE.md`](PERFORMANCE.md) for the full Phase D progression, what the engine caches at runtime, and how to reproduce the numbers on your own hardware.
 

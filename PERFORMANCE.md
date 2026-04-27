@@ -11,26 +11,26 @@ the engine caches at runtime.
 ## Headline numbers
 
 Full-quality `cargo bench --bench comparative` (Criterion, 2 s
-warm-up + 5 s measurement) on Apple M-series, after Phase D (commits
-`afb6072..adc15f8`). Templates produce equivalent *output*; each
+warm-up + 5 s measurement) on Apple M-series, after Phases D and H
+(latest measurement). Templates produce equivalent *output*; each
 engine uses its native syntax.
 
 | Workload | staticweaver | Tera | Minijinja | Askama | vs Minijinja |
 | :--- | ---: | ---: | ---: | ---: | :--- |
-| `simple_sub` (1 tag) | **468 ns** | 386 ns | 584 ns | 93 ns | **+25%** (we win) |
-| `many_sub_32` (32 tags) | **11.8 µs** | 4.58 µs | 11.24 µs | 830 ns | tied (−5%) |
-| `escape_heavy` (10 KB body, 5% metachar) | **22.8 µs** | 84.2 µs | 23.2 µs | 22.9 µs | **+2%** (ties Askama too) |
-| `each_100` (100 items) | 54.9 µs | 17.7 µs | 19.3 µs | 5.13 µs | −2.85× |
-| `each_1000` (1000 items) | 535 µs | 171 µs | 178 µs | 48 µs | −3.0× |
-| `if_chain` (nested conditionals) | 2.30 µs | 444 ns | 640 ns | 25 ns | −3.6× |
-| `filter_chain` (`trim \| upper`) | **980 ns** | 618 ns | 976 ns | 197 ns | tied (+0%) |
+| `simple_sub` (1 tag) | **497 ns** | 388 ns | 591 ns | 95 ns | **+19%** (we win) |
+| `many_sub_32` (32 tags) | **12.85 µs** | 5.96 µs | 14.40 µs | 973 ns | **+11%** (we win) |
+| `escape_heavy` (10 KB body, 5% metachar) | **23.3 µs** | 77.8 µs | 24.3 µs | 23.2 µs | **+4%** (ties Askama too) |
+| `each_100` (100 items) | 58.3 µs | 17.8 µs | 23.6 µs | 5.24 µs | −2.5× |
+| `each_1000` (1000 items) | 557 µs | 171 µs | 184 µs | 51.9 µs | −3.0× |
+| `if_chain` (nested conditionals) | 2.51 µs | 455 ns | 656 ns | 25.4 ns | −3.8× |
+| `filter_chain` (`trim \| upper`) | **1.03 µs** | 620 ns | 988 ns | 198 ns | **+5%** (we win) |
 
 **Wins or ties Minijinja on 4 / 7 workloads.** We **beat Tera on
-escape-heavy 3.7×** and **match Askama on the same workload**
-(22.8 µs vs 22.9 µs) — the SIMD escape path is fully competitive
+escape-heavy 3.3×** and **match Askama on the same workload**
+(23.3 µs vs 23.2 µs) — the SIMD escape path is fully competitive
 with Askama's compile-time codegen on long inputs.
 
-The remaining 2.85–3.6× gap on loops and conditional chains is
+The remaining 2.5–3.8× gap on loops and conditional chains is
 constant-factor per-tag overhead in the runtime AST walker; closing
 it would require a bytecode compiler. That was scoped as Phase D
 Option 1 and explicitly rejected to preserve the "small enough to
