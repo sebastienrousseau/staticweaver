@@ -820,6 +820,7 @@ impl Engine {
                 template,
                 context,
                 &accumulated,
+                None,
                 output,
                 depth,
             ),
@@ -846,6 +847,7 @@ impl Engine {
         template: &str,
         context: &Context,
         blocks: &BlockOverrides,
+        super_body: Option<&str>,
         output: &mut String,
         depth: usize,
     ) -> Result<FlowSignal, EngineError> {
@@ -974,6 +976,7 @@ impl Engine {
                         chosen,
                         active,
                         blocks,
+                        super_body,
                         output,
                         depth + 1,
                     )?;
@@ -1075,6 +1078,7 @@ impl Engine {
                         body,
                         &child,
                         blocks,
+                        super_body,
                         output,
                         depth + 1,
                     )?;
@@ -1105,6 +1109,36 @@ impl Engine {
             }
             if key_trimmed == "#continue" {
                 return Ok(FlowSignal::Continue);
+            }
+
+            // ── Inheritance super() ────────────────────────────────
+            // `{{ super() }}` inside a child #block override expands
+            // to the parent block's default body, rendered through
+            // the same dispatch loop so it composes naturally with
+            // partials, expressions, etc. Outside an override
+            // context (super_body is None) the tag emits nothing —
+            // template authors who use it elsewhere get a silent
+            // no-op rather than an error, matching Jinja's lenient
+            // semantics.
+            if key_trimmed == "super()" {
+                if let Some(parent) = super_body {
+                    let signal = self.render_recursive(
+                        origin,
+                        parent,
+                        context,
+                        blocks,
+                        // super inside super is a no-op — the
+                        // parent has no further parent here.
+                        None,
+                        output,
+                        depth + 1,
+                    )?;
+                    if signal != FlowSignal::Done {
+                        return Ok(signal);
+                    }
+                }
+                rest = after_tag;
+                continue;
             }
 
             // ── Variable assignment ────────────────────────────────
@@ -1148,15 +1182,25 @@ impl Engine {
                         .map_err(|e| {
                             annotate_pos(e, origin, key_trimmed)
                         })?;
-                let body_to_render: &str = blocks
-                    .get(name)
-                    .map(String::as_str)
-                    .unwrap_or(default_body);
+                // If the child overrode this block, render the
+                // override and expose the parent's default body via
+                // `{{ super() }}` inside the override. If no
+                // override is present, render the default and clear
+                // any inherited super (super() at this level should
+                // not leak the outer super body).
+                let (body_to_render, super_for_body) =
+                    match blocks.get(name) {
+                        Some(override_body) => {
+                            (override_body.as_str(), Some(default_body))
+                        }
+                        None => (default_body, None),
+                    };
                 let signal = self.render_recursive(
                     origin,
                     body_to_render,
                     context,
                     blocks,
+                    super_for_body,
                     output,
                     depth + 1,
                 )?;
@@ -1215,6 +1259,10 @@ impl Engine {
                     &content,
                     ctx_ref,
                     blocks,
+                    // super() does not cross the partial boundary;
+                    // a partial that uses {{ super() }} would be a
+                    // template-author error.
+                    None,
                     output,
                     depth + 1,
                 )?;
@@ -4098,6 +4146,96 @@ mod tests {
             matches!(err, EngineError::InvalidTemplate(_)),
             "got {err:?}"
         );
+    }
+
+    // ── H4: super() in inherited blocks ───────────────────────────
+
+    #[test]
+    fn super_in_child_block_includes_parent_default() {
+        use std::collections::HashMap;
+        let mut store = HashMap::new();
+        let _ = store.insert(
+            "base".to_string(),
+            "[{{#block \"body\"}}DEFAULT{{/block}}]".to_string(),
+        );
+        let _ = store.insert(
+            "child".to_string(),
+            "{{#extends \"base\"}}\
+             {{#block \"body\"}}( {{ super() }} )-OVR{{/block}}"
+                .to_string(),
+        );
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine.render_page(&ctx, "child").unwrap();
+        assert_eq!(out, "[( DEFAULT )-OVR]");
+    }
+
+    #[test]
+    fn super_outside_override_is_silent_no_op() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out =
+            engine.render_template("a{{ super() }}b", &ctx).unwrap();
+        assert_eq!(out, "ab");
+    }
+
+    #[test]
+    fn super_does_not_leak_across_partial_boundary() {
+        use std::collections::HashMap;
+        // Partial uses {{ super() }}; that should be a silent no-op
+        // even when the partial is included from inside a block
+        // override that has a non-empty super body.
+        let mut store = HashMap::new();
+        let _ = store.insert(
+            "base".to_string(),
+            "[{{#block \"main\"}}base{{/block}}]".to_string(),
+        );
+        let _ = store.insert(
+            "child".to_string(),
+            "{{#extends \"base\"}}\
+             {{#block \"main\"}}{{> p}}{{/block}}"
+                .to_string(),
+        );
+        let _ = store
+            .insert("p".to_string(), "<{{ super() }}>".to_string());
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine.render_page(&ctx, "child").unwrap();
+        // super() inside p.html sees no parent body; emits nothing.
+        assert_eq!(out, "[<>]");
+    }
+
+    #[test]
+    fn super_renders_parent_body_with_parent_tags_resolved() {
+        use std::collections::HashMap;
+        // Parent block contains a tag that gets substituted from
+        // the same context — verify super() renders the parent
+        // body through the FULL pipeline (escape, dot-paths, etc).
+        let mut store = HashMap::new();
+        let _ = store.insert(
+            "base".to_string(),
+            "{{#block \"hi\"}}hello, {{name}}{{/block}}!".to_string(),
+        );
+        let _ = store.insert(
+            "child".to_string(),
+            "{{#extends \"base\"}}\
+             {{#block \"hi\"}}>>> {{ super() }} <<<{{/block}}"
+                .to_string(),
+        );
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let out = engine.render_page(&ctx, "child").unwrap();
+        assert_eq!(out, ">>> hello, Ada <<<!");
     }
 
     // ── G3: TemplateLoader trait ───────────────────────────────────
