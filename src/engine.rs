@@ -70,7 +70,7 @@ use crate::context::Context;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -142,6 +142,137 @@ pub type TestFn = Arc<
 /// `{{#extends}}` levels.
 type BlockOverrides = HashMap<String, String>;
 
+/// Source-of-truth for template files.
+///
+/// The default loader ([`FsLoader`]) reads templates from a directory
+/// on disk, mapping `name` to `<root>/<name>.html`. Implementing
+/// this trait yourself lets you serve templates from any backend —
+/// an in-memory map ([`MemoryLoader`]), a database, an embedded
+/// asset bundle, or a remote service.
+///
+/// Loaders are looked up by `Engine` whenever it resolves a
+/// `{{> partial}}`, a `{{#extends "base"}}`, or a `render_page`
+/// call. The `name` passed in has already been validated against
+/// path-traversal patterns (no `/`, `\`, `..`, or null bytes), so
+/// implementations don't need to re-validate.
+///
+/// `Send + Sync` is required so an `Engine` stays usable across
+/// threads — e.g. behind an `Arc<Engine>` in a web handler.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::engine::{Engine, MemoryLoader};
+/// use staticweaver::{Context, EngineError};
+/// use std::collections::HashMap;
+/// use std::sync::Arc;
+/// use std::time::Duration;
+///
+/// // In-memory templates — no filesystem touched.
+/// let mut store = HashMap::new();
+/// let _ = store.insert("hello".to_string(), "Hi, {{name}}!".to_string());
+/// let mut engine = Engine::with_loader(
+///     Arc::new(MemoryLoader::new(store)),
+///     Duration::from_secs(60),
+/// );
+///
+/// let mut ctx = Context::new();
+/// ctx.set("name".to_string(), "Ada".to_string());
+/// assert_eq!(engine.render_page(&ctx, "hello").unwrap(), "Hi, Ada!");
+/// # Ok::<_, EngineError>(())
+/// ```
+pub trait TemplateLoader: Send + Sync {
+    /// Loads the template named `name`. Implementations should
+    /// return `EngineError::Io` for missing/unreadable templates
+    /// (so the existing error pattern matching keeps working).
+    fn load(&self, name: &str) -> Result<String, EngineError>;
+}
+
+/// Filesystem-backed [`TemplateLoader`]. Resolves
+/// `name` to `<root>/<name>.html`. Used as the default loader by
+/// [`Engine::new`].
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::engine::{FsLoader, TemplateLoader};
+/// use std::path::PathBuf;
+///
+/// let loader = FsLoader::new(PathBuf::from("templates"));
+/// // loader.load("post") would read templates/post.html
+/// let _ = loader; // silence unused warning
+/// ```
+#[derive(Debug, Clone)]
+pub struct FsLoader {
+    /// Directory under which `name.html` files live.
+    pub root: PathBuf,
+}
+
+impl FsLoader {
+    /// Creates a new `FsLoader` rooted at `root`.
+    #[must_use]
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+}
+
+impl TemplateLoader for FsLoader {
+    fn load(&self, name: &str) -> Result<String, EngineError> {
+        let path = self.root.join(format!("{name}.html"));
+        Ok(fs::read_to_string(&path)?)
+    }
+}
+
+/// In-memory [`TemplateLoader`] backed by a `HashMap`. Useful for
+/// tests, embedded asset bundles, or any case where templates are
+/// known at build time and shouldn't touch the filesystem.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::engine::{MemoryLoader, TemplateLoader};
+/// use std::collections::HashMap;
+///
+/// let mut map = HashMap::new();
+/// let _ = map.insert("greet".to_string(), "Hello!".to_string());
+/// let loader = MemoryLoader::new(map);
+/// assert_eq!(loader.load("greet").unwrap(), "Hello!");
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct MemoryLoader {
+    /// Template name → body map.
+    pub templates: HashMap<String, String>,
+}
+
+impl MemoryLoader {
+    /// Creates a `MemoryLoader` populated with `templates`.
+    #[must_use]
+    pub fn new(templates: HashMap<String, String>) -> Self {
+        Self { templates }
+    }
+
+    /// Inserts or replaces the template named `name`. Returns the
+    /// previous body if any.
+    pub fn insert(
+        &mut self,
+        name: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Option<String> {
+        self.templates.insert(name.into(), body.into())
+    }
+}
+
+impl TemplateLoader for MemoryLoader {
+    fn load(&self, name: &str) -> Result<String, EngineError> {
+        self.templates.get(name).cloned().ok_or_else(|| {
+            EngineError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("MemoryLoader: no template named `{name}`"),
+            ))
+        })
+    }
+}
+
 /// Loop-control signal returned by `render_recursive`. `Continue`
 /// asks the enclosing `#each` to skip to the next iteration;
 /// `Break` asks it to stop iterating. `Done` is the normal
@@ -161,7 +292,7 @@ enum FlowSignal {
 const MAX_RENDER_DEPTH: usize = 10;
 
 #[cfg(feature = "remote-templates")]
-use std::{fs::File, path::PathBuf};
+use std::{fs::File, path::Path};
 
 /// Canonical engine error type. Re-exported from `crate::error` to keep a
 /// single source of truth; callers can use either `staticweaver::EngineError`
@@ -218,6 +349,12 @@ pub struct Engine {
     /// can override a built-in of the same name. Populate via
     /// [`Engine::add_test`].
     pub custom_tests: HashMap<String, TestFn>,
+    /// Source of template content for `render_page`, partial
+    /// includes, and `{{#extends}}`. Defaults to an [`FsLoader`]
+    /// rooted at `template_path`. Override via
+    /// [`Engine::with_loader`] for in-memory or custom-backend
+    /// templates.
+    pub loader: Arc<dyn TemplateLoader>,
 }
 
 // `Engine` is mostly auto-debuggable, but `custom_filters` carries
@@ -239,6 +376,8 @@ impl std::fmt::Debug for Engine {
                 "custom_tests",
                 &self.custom_tests.keys().collect::<Vec<_>>(),
             )
+            // dyn-trait field — Debug just shows the placeholder.
+            .field("loader", &"<dyn TemplateLoader>")
             .finish()
     }
 }
@@ -269,6 +408,61 @@ impl Engine {
             escape_html: true,
             custom_filters: HashMap::new(),
             custom_tests: HashMap::new(),
+            loader: Arc::new(FsLoader::new(PathBuf::from(
+                template_path,
+            ))),
+        }
+    }
+
+    /// Constructs an engine that loads templates through `loader`
+    /// instead of the default filesystem backend. Use this when
+    /// you want in-memory templates ([`MemoryLoader`]), templates
+    /// stored in a database, embedded asset bundles, or any other
+    /// custom source.
+    ///
+    /// `template_path` is set to the empty string in this
+    /// constructor — it's only used by the default `FsLoader`,
+    /// which the custom loader replaces. Path-validation logic on
+    /// partial / extends names still applies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::engine::{Engine, MemoryLoader};
+    /// use staticweaver::Context;
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let mut store = HashMap::new();
+    /// let _ = store
+    ///     .insert("hello".to_string(), "Hi, {{name}}!".to_string());
+    /// let mut engine = Engine::with_loader(
+    ///     Arc::new(MemoryLoader::new(store)),
+    ///     Duration::from_secs(60),
+    /// );
+    ///
+    /// let mut ctx = Context::new();
+    /// ctx.set("name".to_string(), "Ada".to_string());
+    /// assert_eq!(
+    ///     engine.render_page(&ctx, "hello").unwrap(),
+    ///     "Hi, Ada!",
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_loader(
+        loader: Arc<dyn TemplateLoader>,
+        cache_ttl: Duration,
+    ) -> Self {
+        Self {
+            template_path: String::new(),
+            render_cache: Cache::new(cache_ttl),
+            open_delim: "{{".to_string(),
+            close_delim: "}}".to_string(),
+            escape_html: true,
+            custom_filters: HashMap::new(),
+            custom_tests: HashMap::new(),
+            loader,
         }
     }
 
@@ -427,10 +621,9 @@ impl Engine {
             return Ok(cached.to_string());
         }
 
-        // Attempt to read the layout template from the file system
-        let template_path = Path::new(&self.template_path)
-            .join(format!("{layout}.html"));
-        let template_content = fs::read_to_string(&template_path)?;
+        // Load the layout body via the configured TemplateLoader
+        // (defaults to FsLoader rooted at `self.template_path`).
+        let template_content = self.loader.load(layout)?;
 
         // Render the template with the provided context
         let rendered =
@@ -609,9 +802,7 @@ impl Engine {
                 for (k, v) in collect_blocks(template, open, close)? {
                     let _ = accumulated.entry(k).or_insert(v);
                 }
-                let base_path = Path::new(&self.template_path)
-                    .join(format!("{base_name}.html"));
-                let base_content = fs::read_to_string(&base_path)?;
+                let base_content = self.loader.load(base_name)?;
                 // Switch `origin` to the base file's content — line
                 // numbers in errors reported during base-template
                 // rendering refer to the base file, not the child.
@@ -994,9 +1185,7 @@ impl Engine {
                 }
                 validate_path(name)?;
 
-                let partial_path = Path::new(&self.template_path)
-                    .join(format!("{name}.html"));
-                let content = fs::read_to_string(&partial_path)?;
+                let content = self.loader.load(name)?;
 
                 let render_ctx;
                 let ctx_ref = if params_str.is_empty() {
@@ -3909,6 +4098,115 @@ mod tests {
             matches!(err, EngineError::InvalidTemplate(_)),
             "got {err:?}"
         );
+    }
+
+    // ── G3: TemplateLoader trait ───────────────────────────────────
+
+    #[test]
+    fn memory_loader_serves_render_page() {
+        use std::collections::HashMap;
+        let mut map = HashMap::new();
+        let _ = map.insert(
+            "greet".to_string(),
+            "Hello, {{name}}!".to_string(),
+        );
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(map)),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let out = engine.render_page(&ctx, "greet").unwrap();
+        assert_eq!(out, "Hello, Ada!");
+    }
+
+    #[test]
+    fn memory_loader_resolves_partials() {
+        use std::collections::HashMap;
+        let mut map = HashMap::new();
+        let _ = map.insert(
+            "main".to_string(),
+            "outer {{> inner}} outer".to_string(),
+        );
+        let _ =
+            map.insert("inner".to_string(), "<{{name}}>".to_string());
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(map)),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "x".to_string());
+        let out = engine.render_page(&ctx, "main").unwrap();
+        assert_eq!(out, "outer <x> outer");
+    }
+
+    #[test]
+    fn memory_loader_resolves_extends_chain() {
+        use std::collections::HashMap;
+        let mut map = HashMap::new();
+        let _ = map.insert(
+            "base".to_string(),
+            "[{{#block \"body\"}}default{{/block}}]".to_string(),
+        );
+        let _ = map.insert(
+            "child".to_string(),
+            "{{#extends \"base\"}}{{#block \"body\"}}OVR{{/block}}"
+                .to_string(),
+        );
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(map)),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine.render_page(&ctx, "child").unwrap();
+        assert_eq!(out, "[OVR]");
+    }
+
+    #[test]
+    fn memory_loader_missing_template_yields_io_error() {
+        let engine = Engine::with_loader(
+            Arc::new(MemoryLoader::default()),
+            Duration::from_secs(60),
+        );
+        let mut engine = engine;
+        let ctx = Context::new();
+        let err = engine.render_page(&ctx, "missing").unwrap_err();
+        assert!(matches!(err, EngineError::Io(_)), "{err:?}");
+    }
+
+    #[test]
+    fn memory_loader_insert_replaces_template() {
+        let mut loader = MemoryLoader::default();
+        let prev = loader.insert("k", "first");
+        assert!(prev.is_none());
+        let prev = loader.insert("k", "second");
+        assert_eq!(prev.as_deref(), Some("first"));
+        assert_eq!(loader.load("k").unwrap(), "second");
+    }
+
+    #[test]
+    fn fs_loader_serves_real_files() {
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(temp.path().join("page.html"), "fs body {{x}}")
+            .unwrap();
+        let loader = FsLoader::new(temp.path().to_path_buf());
+        assert_eq!(loader.load("page").unwrap(), "fs body {{x}}");
+    }
+
+    #[test]
+    fn engine_new_uses_fs_loader_by_default() {
+        // Backwards-compat: render_page on the original constructor
+        // still walks the filesystem.
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(temp.path().join("p.html"), "default {{w}}").unwrap();
+        let mut engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set("w".to_string(), "world".to_string());
+        let out = engine.render_page(&ctx, "p").unwrap();
+        assert_eq!(out, "default world");
     }
 
     // ── G2: String filters ─────────────────────────────────────────
