@@ -142,6 +142,19 @@ pub type TestFn = Arc<
 /// `{{#extends}}` levels.
 type BlockOverrides = HashMap<String, String>;
 
+/// Loop-control signal returned by `render_recursive`. `Continue`
+/// asks the enclosing `#each` to skip to the next iteration;
+/// `Break` asks it to stop iterating. `Done` is the normal
+/// terminal state and bubbles up unchanged through every layer.
+/// At the top level the signal is silently discarded — using
+/// `#break` / `#continue` outside a loop is a no-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlowSignal {
+    Done,
+    Break,
+    Continue,
+}
+
 /// Maximum nesting depth for `{{#extends}}`, partial inclusion, and
 /// `{{#block}}` body rendering combined. Caps mutually-recursive
 /// templates before the stack does.
@@ -476,7 +489,9 @@ impl Engine {
         }
 
         let mut output = String::with_capacity(template.len());
-        self.render_resolved(
+        // Top-level FlowSignal is discarded — `#break` / `#continue`
+        // outside a loop is a no-op.
+        let _ = self.render_resolved(
             template,
             template,
             context,
@@ -579,7 +594,7 @@ impl Engine {
         mut accumulated: BlockOverrides,
         output: &mut String,
         depth: usize,
-    ) -> Result<(), EngineError> {
+    ) -> Result<FlowSignal, EngineError> {
         if depth > MAX_RENDER_DEPTH {
             return Err(EngineError::Render(format!(
                 "Maximum template recursion depth ({MAX_RENDER_DEPTH}) exceeded"
@@ -642,7 +657,7 @@ impl Engine {
         blocks: &BlockOverrides,
         output: &mut String,
         depth: usize,
-    ) -> Result<(), EngineError> {
+    ) -> Result<FlowSignal, EngineError> {
         if depth > MAX_RENDER_DEPTH {
             return Err(EngineError::Render(format!(
                 "Maximum template recursion depth ({MAX_RENDER_DEPTH}) exceeded"
@@ -763,7 +778,7 @@ impl Engine {
                     else_body.unwrap_or("")
                 };
                 if !chosen.is_empty() {
-                    self.render_recursive(
+                    let signal = self.render_recursive(
                         origin,
                         chosen,
                         active,
@@ -771,6 +786,11 @@ impl Engine {
                         output,
                         depth + 1,
                     )?;
+                    // Propagate Break/Continue upward; the
+                    // enclosing #each (if any) handles it.
+                    if signal != FlowSignal::Done {
+                        return Ok(signal);
+                    }
                 }
                 rest = after_block;
                 continue;
@@ -859,7 +879,7 @@ impl Engine {
                     if let Some(k) = key_opt {
                         child.set_value_str("@key", k.as_str());
                     }
-                    self.render_recursive(
+                    let signal = self.render_recursive(
                         origin,
                         body,
                         &child,
@@ -867,9 +887,33 @@ impl Engine {
                         output,
                         depth + 1,
                     )?;
+                    // `#each` is the loop-control sink:
+                    //   * Break  -> stop iterating, render normally
+                    //              after the loop.
+                    //   * Continue -> skip to next iteration.
+                    //   * Done   -> normal completion of this body.
+                    match signal {
+                        FlowSignal::Break => break,
+                        FlowSignal::Continue | FlowSignal::Done => {}
+                    }
                 }
                 rest = after_block;
                 continue;
+            }
+
+            // ── Loop control ───────────────────────────────────────
+            // `{{#break}}` and `{{#continue}}` short-circuit the
+            // current iteration of the enclosing `#each` loop.
+            // They emit nothing to the output and propagate a
+            // FlowSignal up through any nested #if / #block until
+            // the loop catches them. Outside a loop the signal
+            // bubbles to the top-level renderer and is silently
+            // discarded — using `#break` at top-level is a no-op.
+            if key_trimmed == "#break" {
+                return Ok(FlowSignal::Break);
+            }
+            if key_trimmed == "#continue" {
+                return Ok(FlowSignal::Continue);
             }
 
             // ── Variable assignment ────────────────────────────────
@@ -917,7 +961,7 @@ impl Engine {
                     .get(name)
                     .map(String::as_str)
                     .unwrap_or(default_body);
-                self.render_recursive(
+                let signal = self.render_recursive(
                     origin,
                     body_to_render,
                     context,
@@ -925,6 +969,9 @@ impl Engine {
                     output,
                     depth + 1,
                 )?;
+                if signal != FlowSignal::Done {
+                    return Ok(signal);
+                }
                 rest = after_block;
                 continue;
             }
@@ -970,8 +1017,11 @@ impl Engine {
                 // Partial bodies are NEW &str values not in the
                 // outer origin — switch origin to the partial's
                 // content so any error inside the partial reports a
-                // line/column relative to the partial file.
-                self.render_recursive(
+                // line/column relative to the partial file. Loop
+                // control (#break / #continue) inside a partial does
+                // *not* leak across the partial boundary; the signal
+                // is swallowed so partials remain self-contained.
+                let _ = self.render_recursive(
                     &content,
                     &content,
                     ctx_ref,
@@ -1068,7 +1118,7 @@ impl Engine {
         }
 
         output.push_str(rest);
-        Ok(())
+        Ok(FlowSignal::Done)
     }
 
     /// Changes the delimiters used to identify template tags.
@@ -3776,6 +3826,102 @@ mod tests {
             matches!(err, EngineError::InvalidTemplate(_)),
             "got {err:?}"
         );
+    }
+
+    // ── G1: Loop break / continue ─────────────────────────────────
+
+    #[test]
+    fn each_break_stops_iteration() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b", "c", "d"]);
+        // Stop emitting once we've seen "b".
+        let out = engine
+            .render_template(
+                "{{#each items}}\
+                 {{#if this == \"b\"}}{{#break}}{{/if}}\
+                 [{{this}}]\
+                 {{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "[a]");
+    }
+
+    #[test]
+    fn each_continue_skips_iteration() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b", "c"]);
+        // Skip "b", emit the rest.
+        let out = engine
+            .render_template(
+                "{{#each items}}\
+                 {{#if this == \"b\"}}{{#continue}}{{/if}}\
+                 [{{this}}]\
+                 {{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "[a][c]");
+    }
+
+    #[test]
+    fn break_propagates_through_nested_if() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["x", "y", "z"]);
+        // The break is inside two nested #if blocks; should still
+        // bubble up to the each loop.
+        let out = engine
+            .render_template(
+                "{{#each items}}\
+                 {{#if true}}{{#if this == \"y\"}}{{#break}}{{/if}}{{/if}}\
+                 [{{this}}]\
+                 {{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "[x]");
+    }
+
+    #[test]
+    fn break_in_one_each_does_not_affect_outer_loop() {
+        // An inner #break should only short-circuit its own #each,
+        // not the outer one.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("outer".to_string(), vec!["A", "B"]);
+        ctx.set_value("inner".to_string(), vec!["1", "2", "3"]);
+        let out = engine
+            .render_template(
+                "{{#each outer}}\
+                 [{{this}}:\
+                 {{#each inner}}\
+                 {{#if this == \"2\"}}{{#break}}{{/if}}\
+                 {{this}}\
+                 {{/each}}\
+                 ]\
+                 {{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        // Inner each emits "1" then breaks at "2"; outer keeps going.
+        assert_eq!(out, "[A:1][B:1]");
+    }
+
+    #[test]
+    fn break_at_top_level_is_silent_no_op() {
+        // `#break` outside any loop should not error — the signal
+        // bubbles to render_template and is discarded.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template("before{{#break}}after", &ctx)
+            .unwrap();
+        // Render stops at #break; "after" is not emitted because
+        // render_recursive returned early.
+        assert_eq!(out, "before");
     }
 
     // ── F4: Custom tests API ───────────────────────────────────────
