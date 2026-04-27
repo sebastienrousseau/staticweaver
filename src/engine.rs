@@ -3264,6 +3264,430 @@ mod tests {
         assert!(msg.contains("line 2"), "got: {msg}");
     }
 
+    // ── Coverage: hit ≥98% line coverage ───────────────────────────
+
+    #[test]
+    fn engine_debug_impl_lists_filter_names() {
+        use std::sync::Arc;
+        let mut engine = Engine::new("t", Duration::from_secs(60));
+        let _ = engine.add_filter(
+            "shout",
+            Arc::new(|input, _| Ok(input.to_uppercase())),
+        );
+        let s = format!("{engine:?}");
+        assert!(s.contains("Engine"), "{s}");
+        assert!(s.contains("shout"), "{s}");
+        assert!(s.contains("template_path"), "{s}");
+    }
+
+    #[test]
+    fn render_page_to_writes_into_a_buffer() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let layout = temp.path().join("hello.html");
+        fs::write(&layout, "Hello, {{name}}!").unwrap();
+        let mut engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set("name".to_string(), "Ada".to_string());
+        let mut buf: Vec<u8> = Vec::new();
+        engine.render_page_to(&ctx, "hello", &mut buf).unwrap();
+        assert_eq!(buf, b"Hello, Ada!");
+    }
+
+    #[test]
+    fn pos_suffix_empty_for_unrelated_slice() {
+        // A slice that isn't a substring of `origin` returns "".
+        let origin = "alpha";
+        let other = String::from("beta");
+        assert_eq!(pos_suffix(origin, &other), "");
+    }
+
+    #[test]
+    fn annotate_pos_passes_through_io_errors() {
+        // Only InvalidTemplate / Render get position-stamped; Io
+        // (and other variants) flow through unchanged.
+        let err = EngineError::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "raw",
+        ));
+        let template = "abc";
+        let wrapped = annotate_pos(err, template, &template[..1]);
+        match wrapped {
+            EngineError::Io(_) => {}
+            other => panic!("expected Io, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn annotate_pos_is_idempotent() {
+        // A message that already carries `at line N, column M` is
+        // not stamped twice.
+        let err =
+            EngineError::Render("boom at line 1, column 2".to_string());
+        let template = "abc";
+        let wrapped = annotate_pos(err, template, &template[..1]);
+        if let EngineError::Render(msg) = wrapped {
+            // Substring "at line " appears exactly once.
+            let count = msg.matches("at line ").count();
+            assert_eq!(count, 1, "double-stamped: {msg}");
+        } else {
+            panic!("expected Render variant");
+        }
+    }
+
+    #[test]
+    fn filter_truncate_pass_through_when_input_short() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "hi".to_string());
+        let out = engine
+            .render_template("{{ s | truncate:30 }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "hi");
+    }
+
+    #[test]
+    fn filter_capitalize_on_empty_input() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), String::new());
+        let out = engine
+            .render_template("{{ s | capitalize }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn filter_round_keeps_fractional_when_op_returns_non_integer() {
+        // op = identity-on-fraction; result keeps the decimal.
+        // We don't have a built-in op that returns a fractional
+        // float, so exercise the format branch via parse_number_filter
+        // directly with a custom op.
+        let s = parse_number_filter("3", "abs", |n| n + 0.5).unwrap();
+        assert_eq!(s, "3.5");
+    }
+
+    #[test]
+    fn parse_operand_errors_at_end_of_expression() {
+        // Empty expression has no operand at all.
+        let err = parse_expr("").unwrap_err();
+        assert!(
+            format!("{err}").contains("end of expression"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn parse_operand_errors_on_keyword_in_operand_position() {
+        // Starting an expression with `and` is a parse error.
+        let err = parse_expr("and 1").unwrap_err();
+        assert!(format!("{err}").contains("expected operand"), "{err}");
+    }
+
+    #[test]
+    fn is_test_errors_on_missing_name() {
+        // `x is` with nothing after is a parse error.
+        let err = parse_expr("x is").unwrap_err();
+        assert!(
+            format!("{err}").contains("expected test name"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn is_test_errors_on_non_path_token_after_is() {
+        // `x is 5` — the test name must be one of defined/empty/none,
+        // and 5 isn't a Path token at all.
+        let err = parse_expr("x is 5").unwrap_err();
+        assert!(
+            format!("{err}").contains("expected test name"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn set_assignment_empty_name_errors_cleanly() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err =
+            engine.render_template("{{#set = 1}}", &ctx).unwrap_err();
+        assert!(format!("{err}").contains("empty name"), "{err}");
+    }
+
+    #[test]
+    fn set_assignment_empty_value_errors_cleanly() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err =
+            engine.render_template("{{#set x = }}", &ctx).unwrap_err();
+        // Just check the error fires; message comes from parse_set_assignment.
+        assert!(
+            matches!(err, EngineError::InvalidTemplate(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn partial_params_empty_key_errors() {
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(temp.path().join("p.html"), "x").unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let err =
+            engine.render_template("{{> p =1}}", &ctx).unwrap_err();
+        assert!(format!("{err}").contains("empty key"), "{err}");
+    }
+
+    #[test]
+    fn partial_params_missing_equals_errors() {
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(temp.path().join("p.html"), "x").unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let err =
+            engine.render_template("{{> p key1}}", &ctx).unwrap_err();
+        assert!(format!("{err}").contains("missing"), "{err}");
+    }
+
+    #[test]
+    fn annotate_pos_stamps_bare_render_message() {
+        // A Render error without existing position info gets the
+        // suffix appended.
+        let err = EngineError::Render("plain message".to_string());
+        let template = "abcdef";
+        let wrapped = annotate_pos(err, template, &template[3..]);
+        if let EngineError::Render(msg) = wrapped {
+            assert!(msg.contains("plain message"), "{msg}");
+            assert!(msg.contains("at line 1"), "{msg}");
+            assert!(msg.contains("column 4"), "{msg}");
+        } else {
+            panic!("expected Render");
+        }
+    }
+
+    #[test]
+    fn annotate_pos_stamps_bare_invalid_template_message() {
+        let err =
+            EngineError::InvalidTemplate("syntax oops".to_string());
+        let template = "x";
+        let wrapped = annotate_pos(err, template, &template[..1]);
+        if let EngineError::InvalidTemplate(msg) = wrapped {
+            assert!(msg.contains("syntax oops"), "{msg}");
+            assert!(msg.contains("at line 1"), "{msg}");
+        } else {
+            panic!("expected InvalidTemplate");
+        }
+    }
+
+    #[test]
+    fn parse_operand_accepts_true_and_false_literals() {
+        // Exercises the True/False arms in parse_operand.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let yes = engine
+            .render_template(
+                "{{#if true == true}}y{{else}}n{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(yes, "y");
+        let no = engine
+            .render_template(
+                "{{#if false == true}}y{{else}}n{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(no, "n");
+    }
+
+    #[test]
+    fn parse_block_name_accepts_quoted_names() {
+        // Exercises the quoted-strip return in parse_block_name.
+        assert_eq!(parse_block_name("\"title\"").unwrap(), "title");
+        assert_eq!(parse_block_name("'foo'").unwrap(), "foo");
+    }
+
+    #[test]
+    fn parse_extends_unclosed_tag_errors() {
+        // {{#extends with no closing }} — exercises the unclosed
+        // path in parse_extends.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err = engine
+            .render_template(r#"{{#extends "base"#, &ctx)
+            .unwrap_err();
+        assert!(
+            matches!(err, EngineError::InvalidTemplate(_)),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn math_overflow_triggers_for_subtraction() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("min".to_string(), i64::MIN);
+        let err = engine
+            .render_template("{{#if min - 1 == 0}}x{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(format!("{err}").contains("integer overflow"), "{err}");
+    }
+
+    #[test]
+    fn math_overflow_triggers_for_multiplication() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("max".to_string(), i64::MAX);
+        let err = engine
+            .render_template("{{#if max * 2 == 0}}x{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(format!("{err}").contains("integer overflow"), "{err}");
+    }
+
+    #[test]
+    fn math_overflow_triggers_for_integer_division() {
+        // i64::MIN / -1 overflows because the result doesn't fit in i64.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("min".to_string(), i64::MIN);
+        let err = engine
+            .render_template("{{#if min / -1 == 0}}x{{/if}}", &ctx)
+            .unwrap_err();
+        assert!(format!("{err}").contains("integer overflow"), "{err}");
+    }
+
+    #[test]
+    fn partial_params_quoted_value_with_special_chars() {
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(temp.path().join("p.html"), "got={{label}}").unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine
+            .render_template(r#"{{> p label="hi there"}}"#, &ctx)
+            .unwrap();
+        assert_eq!(out, "got=hi there");
+    }
+
+    #[test]
+    fn partial_params_unquoted_value_parsed_as_typed_literal() {
+        // Exercises the bareword parsing branch (true/false/null/int/string).
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("p.html"),
+            "{{#if flag}}on{{else}}off{{/if}}/{{count}}",
+        )
+        .unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine
+            .render_template("{{> p flag=true count=42}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "on/42");
+    }
+
+    #[test]
+    fn parse_expr_errors_on_trailing_junk() {
+        // Exercises the "unexpected token in expression" path in
+        // parse_expr — a complete expression followed by extra
+        // tokens.
+        let err = parse_expr("1 == 1 trailing").unwrap_err();
+        assert!(format!("{err}").contains("unexpected token"), "{err}");
+    }
+
+    #[test]
+    fn url_encode_passes_unreserved_through() {
+        // Exercises every branch of the url_encode match, including
+        // the unreserved-set passthroughs (digits, dash, underscore,
+        // dot, tilde) and the percent-escape fallback.
+        let mut ctx = Context::new();
+        ctx.set("v".to_string(), "Foo-Bar_42.~ x".to_string());
+        let engine = Engine::new("", Duration::from_secs(60));
+        let out = engine
+            .render_template("{{ v | urlencode }}", &ctx)
+            .unwrap();
+        // Space becomes %20; everything else passes through.
+        assert_eq!(out, "Foo-Bar_42.~%20x");
+    }
+
+    #[test]
+    fn parse_filter_args_handles_quoted_commas() {
+        // Exercises the in-quote path of parse_filter_args (commas
+        // inside quotes don't split) plus the comma-separator path.
+        let args = parse_filter_args(r#""a,b","c""#);
+        assert_eq!(args, vec!["a,b", "c"]);
+    }
+
+    #[test]
+    fn partial_params_single_quoted_value() {
+        // Exercises the single-quote arm of parse_partial_value
+        // (most tests use double quotes).
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(temp.path().join("p.html"), "got={{label}}").unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine
+            .render_template("{{> p label='hello'}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "got=hello");
+    }
+
+    #[test]
+    fn block_name_with_single_quotes_works_in_template() {
+        // Exercises parse_block_name single-quote return through
+        // the actual template path (#extends "name" tests cover
+        // double quotes).
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("base.html"),
+            "{{#block 'main'}}default{{/block}}",
+        )
+        .unwrap();
+        let engine = Engine::new(
+            temp.path().to_str().unwrap(),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        // The rendered base just yields the default body; the
+        // important coverage is parse_block_name accepting 'main'.
+        let out = engine
+            .render_template(
+                "{{#extends 'base'}}{{#block 'main'}}HI{{/block}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "HI");
+    }
+
+    #[test]
+    fn unknown_byte_in_expression_consumed_silently() {
+        // Tokenizer encountering an unknown byte advances past it
+        // and returns None for that scan; the parser then hits
+        // end-of-expression.
+        let err = parse_expr("?;%").unwrap_err();
+        // Just verify it errors cleanly rather than panicking.
+        assert!(
+            matches!(err, EngineError::InvalidTemplate(_)),
+            "got {err:?}"
+        );
+    }
+
     // ── F3: Number formatting filters ─────────────────────────────
 
     #[test]

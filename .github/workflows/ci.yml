@@ -56,7 +56,7 @@ jobs:
   # so a coverage regression fails the PR directly, without waiting on
   # Codecov status-check propagation.
   coverage-gate:
-    name: Coverage >= 95%
+    name: Coverage >= 98%
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,8 +74,8 @@ jobs:
           cov="$(printf '%s\n' "$summary" \
                  | awk '/^TOTAL/ {for (i=1;i<=NF;i++) if ($i ~ /%$/) last=$i} END {gsub("%","",last); print last}')"
           echo "line coverage: ${cov}%"
-          awk -v c="$cov" 'BEGIN {exit !(c+0 >= 95.0)}' \
-            || { echo "::error::line coverage ${cov}% below 95% floor"; exit 1; }
+          awk -v c="$cov" 'BEGIN {exit !(c+0 >= 98.0)}' \
+            || { echo "::error::line coverage ${cov}% below 98% floor"; exit 1; }
 
   # Documentation build + coverage gate. Docs are published by docs.rs on
   # release; this job only smoke-tests that the crate documents cleanly
