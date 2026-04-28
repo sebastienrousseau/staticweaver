@@ -30,7 +30,7 @@
 - [Features](#features) -- capability matrix
 - [Library Usage](#library-usage) -- rendering, escaping, delimiters, caching, remote templates
 - [Configuration](#configuration) -- engine and cache options
-- [Examples](#examples) -- six runnable examples
+- [Examples](#examples) -- seven runnable examples
 - [Performance](#performance) -- benchmark matrix vs Tera, Minijinja, Askama
 - [Development](#development) -- make targets, CI
 - [Security](#security) -- safety guarantees
@@ -355,6 +355,123 @@ Bounded caches use **true LRU eviction**: when a new key would push the cache pa
 </details>
 
 <details>
+<summary><b>Stream rendering into an `io::Write` sink</b></summary>
+
+```rust
+use staticweaver::{Context, Engine};
+use std::time::Duration;
+
+let engine = Engine::new("", Duration::from_secs(60));
+let mut ctx = Context::new();
+ctx.set("name".to_string(), "Ada".to_string());
+
+let mut buf: Vec<u8> = Vec::new();
+engine.render_to("Hello, {{name}}!", &ctx, &mut buf).unwrap();
+assert_eq!(buf, b"Hello, Ada!");
+```
+
+`render_to` writes directly to any `io::Write` — `Vec<u8>`, an HTTP response body, a `File`, a `tokio` channel writer. Saves the `String → Vec<u8>` step in the framework's `IntoResponse` path. `render_page_to(&ctx, layout, &mut writer)` is the file-backed counterpart.
+
+</details>
+
+<details>
+<summary><b>Custom filters and tests</b></summary>
+
+```rust
+use staticweaver::{Context, Engine};
+use staticweaver::context::Value;
+use std::sync::Arc;
+use std::time::Duration;
+
+let mut engine = Engine::new("", Duration::from_secs(60));
+
+// Custom filter — receives the pipeline value as &str + colon args.
+let _ = engine.add_filter(
+    "shout",
+    Arc::new(|input, _args| Ok(format!("{}!!!", input.to_uppercase()))),
+);
+
+// Custom test — receives the operand Value + args, returns bool.
+let _ = engine.add_test(
+    "admin",
+    Arc::new(|v, _args| Ok(matches!(v, Value::String(s) if s == "admin"))),
+);
+
+let mut ctx = Context::new();
+ctx.set("name".to_string(), "ada".to_string());
+ctx.set("role".to_string(), "admin".to_string());
+
+let out = engine
+    .render_template(
+        "{{name | shout}} - {{#if role is admin}}Y{{else}}N{{/if}}",
+        &ctx,
+    )
+    .unwrap();
+assert_eq!(out, "ADA!!! - Y");
+```
+
+Both `add_filter` and `add_test` register `Arc<Fn>` closures that override built-ins of the same name. Errors from the closure flow through as `EngineError::Render`.
+
+</details>
+
+<details>
+<summary><b>Pluggable template loaders</b></summary>
+
+```rust
+use staticweaver::{Context, Engine};
+use staticweaver::engine::MemoryLoader;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+let mut store = HashMap::new();
+let _ = store.insert("greet".to_string(), "Hi, {{name}}!".to_string());
+let mut engine = Engine::with_loader(
+    Arc::new(MemoryLoader::new(store)),
+    Duration::from_secs(60),
+);
+
+let mut ctx = Context::new();
+ctx.set("name".to_string(), "Ada".to_string());
+assert_eq!(engine.render_page(&ctx, "greet").unwrap(), "Hi, Ada!");
+```
+
+`Engine::with_loader(Arc<dyn TemplateLoader>, ttl)` substitutes any `Send + Sync` loader for the default filesystem-backed `FsLoader`. `MemoryLoader` is the built-in in-memory backend; implement `TemplateLoader` yourself to load templates from a database, an embedded asset bundle, or a remote service.
+
+</details>
+
+<details>
+<summary><b>Per-extension auto-escape policy</b></summary>
+
+```rust
+use staticweaver::{Context, Engine};
+use staticweaver::engine::MemoryLoader;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+let mut store = HashMap::new();
+let _ = store.insert("page.html".to_string(), "{{x}}".to_string());
+let _ = store.insert("plain.txt".to_string(), "{{x}}".to_string());
+
+let mut engine = Engine::with_loader(
+    Arc::new(MemoryLoader::new(store)),
+    Duration::from_secs(60),
+);
+let _ = engine.autoescape_on(&[".html"]);
+
+let mut ctx = Context::new();
+ctx.set("x".to_string(), "<b>".to_string());
+
+assert_eq!(engine.render_page(&ctx, "page.html").unwrap(), "&lt;b&gt;");
+assert_eq!(engine.render_page(&ctx, "plain.txt").unwrap(), "<b>");
+```
+
+`autoescape_on(&[".html", ".xml"])` makes `render_page` auto-escape only for layouts whose name ends with one of the listed extensions. The global `escape_html` flag still applies to `render_template`. Mirrors Tera's behaviour.
+
+</details>
+
+<details>
 <summary><b>Remote templates (feature-gated)</b></summary>
 
 ```toml
@@ -376,6 +493,46 @@ println!("downloaded to {path}");
 The downloader fetches a fixed set of filenames (`contact.html`, `index.html`, `page.html`, `post.html`, `main.js`, `sw.js`) into a fresh `tempfile::tempdir()`, with a 10 s request timeout and a 1 MiB per-file body cap enforced against both `Content-Length` and the actual read size.
 
 Without the feature, `create_template_folder(Some(url))` returns `EngineError::InvalidTemplate("remote template URLs require the remote-templates feature")`. `create_template_folder(None)` always returns an error — there is no silent default fallback URL.
+
+</details>
+
+<details>
+<summary><b>JSON encode filter (feature-gated)</b></summary>
+
+```toml
+[dependencies]
+staticweaver = { version = "0.0.2", features = ["json"] }
+```
+
+```rust,ignore
+use staticweaver::{Context, Engine};
+use std::time::Duration;
+
+let engine = Engine::new("", Duration::from_secs(60));
+let mut ctx = Context::new();
+ctx.set_value("items".to_string(), vec!["a", "b"]);
+
+let out = engine
+    .render_template("{{ items | json | safe }}", &ctx)
+    .unwrap();
+assert_eq!(out, r#"["a","b"]"#);
+```
+
+The `json` filter walks the full `Value` tree (so `List` and `Map` round-trip correctly) and serialises via `serde_json`. Map keys are sorted for deterministic output. Pair with `| safe` inside `<script>` blocks to suppress the engine's HTML escape on the JSON text.
+
+</details>
+
+<details>
+<summary><b>CLI binary</b></summary>
+
+```bash
+cargo install staticweaver
+
+staticweaver render hello.html --set name=Ada
+echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
+```
+
+`cargo install staticweaver` produces a small `staticweaver` binary alongside the library. Useful for testing templates in the shell without writing a Rust harness. Reads templates from a file path or stdin (`-`); `--set KEY=VALUE` is repeatable; `--no-escape` disables HTML escape; errors exit non-zero.
 
 </details>
 
@@ -447,6 +604,7 @@ All examples live in `examples/` and use the shared `support.rs` helper for the 
 | `engine` | Escaping defaults, `{{!key}}` opt-out, partials, filters, control flow, dot-notation, `render_page` with subdirectories, custom delimiters, path-traversal rejection |
 | `errors` | Every `EngineError` / `TemplateError` variant and its conversions |
 | `remote` | (feature-gated) `create_template_folder(Some(url))` against a local mock server. Run with `cargo run --example remote --features remote-templates`. |
+| `axum` | (feature-gated) End-to-end Axum web-server integration: render-to-`String`, render-to-`Vec<u8>` via `render_to`, per-request context. Run with `cargo run --example axum --features axum-example`. |
 
 ---
 

@@ -260,6 +260,19 @@ cross-platform matrix on Linux + macOS + Windows.
 
 - **MSRV bumped** from `1.56.0` to `1.68` (real floor from
   `thiserror 2.0`, `regex 1.12`, `serde_json 1.0.149`).
+- `criterion` dev-dep bumped `0.5` → `0.8`. Bench files migrated
+  to `std::hint::black_box` (the v0.8 deprecation of the
+  `criterion::black_box` re-export). `cargo bench --bench
+  comparative` runs cleanly under v0.8 with no perf regression.
+  Closes Dependabot #13.
+- `reqwest` (feature-gated) bumped `0.12` → `0.13`. The TLS
+  feature flag was renamed in v0.13: `rustls-tls-native-roots` →
+  `rustls` + `rustls-native-certs`. Same behaviour — TLS via
+  rustls (no OpenSSL pull-in), system root certs honoured.
+  Default builds remain HTTP-free. Closes Dependabot #12.
+- `actions/checkout` workflow action bumped `v4` → `v6` across
+  `ci.yml` (3 references) and `release.yml` (1 reference).
+  Closes Dependabot #9.
 - Template parser rewritten — close-delim search starts after the
   opening one (so `{{}}` no longer matches an empty key), nested
   `{{…{{…}}}}` is properly rejected, bare delimiter chars are

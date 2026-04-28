@@ -64,6 +64,21 @@
 //! Both render entry points return `Result<String, EngineError>`.
 //! Missing keys produce `EngineError::Render`; malformed templates
 //! produce `EngineError::InvalidTemplate`. See [`crate::error`].
+//!
+//! ## Examples
+//!
+//! ```
+//! use staticweaver::{Context, Engine};
+//! use std::time::Duration;
+//!
+//! let engine = Engine::new("templates", Duration::from_secs(60));
+//! let mut ctx = Context::new();
+//! ctx.set("name".to_string(), "Ada".to_string());
+//! let out = engine
+//!     .render_template("Hello, {{name}}!", &ctx)
+//!     .unwrap();
+//! assert_eq!(out, "Hello, Ada!");
+//! ```
 
 use crate::cache::Cache;
 use crate::context::Context;
@@ -185,6 +200,16 @@ pub trait TemplateLoader: Send + Sync {
     /// Loads the template named `name`. Implementations should
     /// return `EngineError::Io` for missing/unreadable templates
     /// (so the existing error pattern matching keeps working).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::engine::{MemoryLoader, TemplateLoader};
+    /// let mut loader = MemoryLoader::default();
+    /// let _ = loader.insert("hello", "Hi {{name}}!");
+    /// assert_eq!(loader.load("hello").unwrap(), "Hi {{name}}!");
+    /// assert!(loader.load("missing").is_err());
+    /// ```
     fn load(&self, name: &str) -> Result<String, EngineError>;
 }
 
@@ -205,11 +230,29 @@ pub trait TemplateLoader: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct FsLoader {
     /// Directory under which `name.html` files live.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::engine::FsLoader;
+    /// use std::path::PathBuf;
+    /// let loader = FsLoader::new(PathBuf::from("templates"));
+    /// assert_eq!(loader.root, PathBuf::from("templates"));
+    /// ```
     pub root: PathBuf,
 }
 
 impl FsLoader {
     /// Creates a new `FsLoader` rooted at `root`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::engine::FsLoader;
+    /// use std::path::PathBuf;
+    /// let loader = FsLoader::new(PathBuf::from("templates"));
+    /// assert_eq!(loader.root, PathBuf::from("templates"));
+    /// ```
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self { root }
@@ -241,11 +284,31 @@ impl TemplateLoader for FsLoader {
 #[derive(Debug, Clone, Default)]
 pub struct MemoryLoader {
     /// Template name → body map.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::engine::MemoryLoader;
+    /// let mut loader = MemoryLoader::default();
+    /// let _ = loader.insert("hello", "Hi {{name}}!");
+    /// assert_eq!(loader.templates.len(), 1);
+    /// ```
     pub templates: HashMap<String, String>,
 }
 
 impl MemoryLoader {
     /// Creates a `MemoryLoader` populated with `templates`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::engine::MemoryLoader;
+    /// use std::collections::HashMap;
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("k".to_string(), "v".to_string());
+    /// let loader = MemoryLoader::new(store);
+    /// assert_eq!(loader.templates.len(), 1);
+    /// ```
     #[must_use]
     pub fn new(templates: HashMap<String, String>) -> Self {
         Self { templates }
@@ -253,6 +316,15 @@ impl MemoryLoader {
 
     /// Inserts or replaces the template named `name`. Returns the
     /// previous body if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::engine::MemoryLoader;
+    /// let mut loader = MemoryLoader::default();
+    /// assert_eq!(loader.insert("k", "first"), None);
+    /// assert_eq!(loader.insert("k", "second").as_deref(), Some("first"));
+    /// ```
     pub fn insert(
         &mut self,
         name: impl Into<String>,
@@ -297,6 +369,14 @@ use std::{fs::File, path::Path};
 /// Canonical engine error type. Re-exported from `crate::error` to keep a
 /// single source of truth; callers can use either `staticweaver::EngineError`
 /// or `staticweaver::engine::EngineError` and pattern-match interchangeably.
+///
+/// # Examples
+///
+/// ```
+/// // Both paths refer to the same type.
+/// fn _f(e: staticweaver::engine::EngineError)
+///     -> staticweaver::EngineError { e }
+/// ```
 pub use crate::error::EngineError;
 
 /// Filenames fetched by default when `Engine::create_template_folder` is
@@ -304,6 +384,13 @@ pub use crate::error::EngineError;
 /// historical six-file set for backwards compatibility; callers who need
 /// a different layout should use
 /// [`Engine::create_template_folder_with_files`].
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::engine::DEFAULT_TEMPLATE_FILES;
+/// assert!(DEFAULT_TEMPLATE_FILES.contains(&"index.html"));
+/// ```
 pub const DEFAULT_TEMPLATE_FILES: &[&str] = &[
     "contact.html",
     "index.html",
@@ -329,31 +416,113 @@ pub const DEFAULT_TEMPLATE_FILES: &[&str] = &[
 /// ```
 pub struct Engine {
     /// Path to the template directory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    /// let engine = Engine::new("templates", Duration::from_secs(60));
+    /// assert_eq!(engine.template_path, "templates");
+    /// ```
     pub template_path: String,
-    /// Cache for rendered templates.
+    /// Cache for rendered templates keyed by `"{layout}:{ctx.hash()}"`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// assert_eq!(engine.render_cache.len(), 0);
+    /// ```
     pub render_cache: Cache<String, String>,
-    /// Opening delimiter for template tags.
+    /// Opening delimiter for template tags. Defaults to `"{{"`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// assert_eq!(engine.open_delim, "{{");
+    /// ```
     pub open_delim: String,
-    /// Closing delimiter for template tags.
+    /// Closing delimiter for template tags. Defaults to `"}}"`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// assert_eq!(engine.close_delim, "}}");
+    /// ```
     pub close_delim: String,
     /// When true, values substituted into templates are HTML-escaped
     /// (`&`, `<`, `>`, `"`, `'`). Prefix a key with `!` to opt out per-tag
     /// (e.g. `{{!content}}` emits the raw value).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    /// let engine = Engine::new("", Duration::from_secs(60))
+    ///     .with_html_escape(false);
+    /// assert!(!engine.escape_html);
+    /// ```
     pub escape_html: bool,
     /// User-registered filters keyed by name. Looked up *before* the
     /// built-in filter set, so a custom filter can override a
     /// built-in of the same name. Populate via [`Engine::add_filter`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// let mut engine = Engine::new("", Duration::from_secs(60));
+    /// let _ = engine.add_filter(
+    ///     "shout",
+    ///     Arc::new(|s, _| Ok(s.to_uppercase())),
+    /// );
+    /// assert!(engine.custom_filters.contains_key("shout"));
+    /// ```
     pub custom_filters: HashMap<String, FilterFn>,
     /// User-registered tests keyed by name. Looked up *before* the
     /// built-in tests (`defined`, `empty`, `none`) so a custom test
     /// can override a built-in of the same name. Populate via
     /// [`Engine::add_test`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// let mut engine = Engine::new("", Duration::from_secs(60));
+    /// let _ = engine.add_test("admin", Arc::new(|_v, _| Ok(true)));
+    /// assert!(engine.custom_tests.contains_key("admin"));
+    /// ```
     pub custom_tests: HashMap<String, TestFn>,
     /// Source of template content for `render_page`, partial
     /// includes, and `{{#extends}}`. Defaults to an [`FsLoader`]
     /// rooted at `template_path`. Override via
     /// [`Engine::with_loader`] for in-memory or custom-backend
     /// templates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    /// let engine = Engine::new("templates", Duration::from_secs(60));
+    /// // The default loader is an FsLoader; the field exposes it
+    /// // as a trait object so callers can swap it freely.
+    /// assert!(engine.loader.load("missing").is_err());
+    /// ```
     pub loader: Arc<dyn TemplateLoader>,
     /// File extensions (e.g. `.html`, `.xml`) for which
     /// [`Engine::render_page`] auto-escapes substitutions.
@@ -362,6 +531,16 @@ pub struct Engine {
     /// of these extensions auto-escape; everything else renders
     /// raw. Matches Tera's per-extension autoescape behaviour.
     /// Populate via [`Engine::autoescape_on`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::Engine;
+    /// use std::time::Duration;
+    /// let mut engine = Engine::new("", Duration::from_secs(60));
+    /// let _ = engine.autoescape_on(&[".html"]);
+    /// assert_eq!(engine.autoescape_extensions, vec![".html"]);
+    /// ```
     pub autoescape_extensions: Vec<String>,
 }
 

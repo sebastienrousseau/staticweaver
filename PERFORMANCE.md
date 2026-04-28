@@ -49,7 +49,10 @@ The Phase D performance work, commit by commit:
 | **D6** | Allocation-free close-tag match in `extract_block` | if_chain −8% (2.6µs → 2.4µs) |
 | **D3** | Reuse `Value::String` buffer in `#each` (`set_value_string`) | each_100 −18% (67µs → 55µs) |
 
-**Cumulative each_1000: 22.6ms → 530µs (42×).**
+**Cumulative each_1000: 22.6 ms → 557 µs (~40× faster).** Numbers
+in the headline table above use the latest post-H measurement;
+intermediate per-phase numbers reflect the bench at the time each
+sub-phase landed.
 
 ## What we cache
 
