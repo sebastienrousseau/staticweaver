@@ -285,6 +285,233 @@ fn benchmark_custom_filter_vs_builtin(c: &mut Criterion) {
     });
 }
 
+/// `{{#each START..END}}` over 1000 numeric items. The synthetic
+/// `Vec<Value::Number>` materialised by the range path is a
+/// different allocation profile than iterating a context-supplied
+/// list, so this regression-guards the H5 range work.
+fn benchmark_render_range_iteration(c: &mut Criterion) {
+    let engine = Engine::new("", Duration::from_secs(60));
+    let ctx = Context::new();
+    let template = "{{#each 0..1000}}{{this}}|{{/each}}";
+
+    let _ = c.bench_function("render_range_iter_1000", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_template(
+                        black_box(template),
+                        black_box(&ctx),
+                    )
+                    .expect("render"),
+            );
+        });
+    });
+}
+
+/// `render_page` cache hit vs miss. The hit path skips parser +
+/// loader entirely; this measures the headroom available for
+/// real-world web workloads where the same page renders against
+/// the same context many times in a row.
+fn benchmark_render_page_cache_hit_vs_miss(c: &mut Criterion) {
+    use std::collections::HashMap;
+    let mut store = HashMap::new();
+    let mut tmpl = String::new();
+    for i in 0..32 {
+        tmpl.push_str(&format!("[{{{{k{i}}}}}]"));
+    }
+    let _ = store.insert("page".to_string(), tmpl);
+    let mut engine = Engine::with_loader(
+        Arc::new(MemoryLoader::new(store)),
+        Duration::from_secs(60),
+    );
+    let mut ctx = Context::new();
+    for i in 0..32 {
+        ctx.set(format!("k{i}"), format!("value{i:05}"));
+    }
+    // Warm the cache once so the measured iters all hit.
+    let _ = engine.render_page(&ctx, "page").unwrap();
+
+    let _ = c.bench_function("render_page_cache_hit", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_page(black_box(&ctx), black_box("page"))
+                    .expect("render_page"),
+            );
+        });
+    });
+
+    // Cache-miss path: clear before each iteration so we measure
+    // the full parse + render every time.
+    let _ = c.bench_function("render_page_cache_miss", |b| {
+        b.iter(|| {
+            engine.clear_cache();
+            let _ = black_box(
+                engine
+                    .render_page(black_box(&ctx), black_box("page"))
+                    .expect("render_page"),
+            );
+        });
+    });
+}
+
+/// Whitespace-control overhead. The `{{- key -}}` form runs
+/// extra trim_end + trim_start passes on adjacent runs of literal
+/// text. This bench compares a heavy whitespace-control template
+/// against an equivalent plain one.
+fn benchmark_whitespace_control(c: &mut Criterion) {
+    let engine = Engine::new("", Duration::from_secs(60));
+    let mut ctx = Context::new();
+    for i in 0..16 {
+        ctx.set(format!("k{i}"), format!("v{i}"));
+    }
+    let mut plain = String::new();
+    let mut wsctrl = String::new();
+    for i in 0..16 {
+        plain.push_str(&format!("    {{{{k{i}}}}}    \n"));
+        wsctrl.push_str(&format!("    {{{{- k{i} -}}}}    \n"));
+    }
+
+    let _ = c.bench_function("render_no_whitespace_control", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_template(black_box(&plain), black_box(&ctx))
+                    .expect("render"),
+            );
+        });
+    });
+    let _ = c.bench_function("render_whitespace_control", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_template(
+                        black_box(&wsctrl),
+                        black_box(&ctx),
+                    )
+                    .expect("render"),
+            );
+        });
+    });
+}
+
+/// Filter-chain scaling. One filter vs five chained filters on the
+/// same value. The pipeline iterates the parsed filter list, so
+/// cost should be linear — this guards against a regression that
+/// would make N-filter chains super-linear.
+fn benchmark_filter_chain_scaling(c: &mut Criterion) {
+    let engine = Engine::new("", Duration::from_secs(60));
+    let mut ctx = Context::new();
+    ctx.set("name".to_string(), "  Ada Lovelace  ".to_string());
+
+    let _ = c.bench_function("filter_chain_one_filter", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_template(
+                        black_box("{{ name | trim }}"),
+                        black_box(&ctx),
+                    )
+                    .expect("render"),
+            );
+        });
+    });
+    let _ = c.bench_function("filter_chain_five_filters", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_template(
+                        black_box(
+                            "{{ name | trim | uppercase | reverse | lowercase | capitalize }}",
+                        ),
+                        black_box(&ctx),
+                    )
+                    .expect("render"),
+            );
+        });
+    });
+}
+
+/// MemoryLoader vs FsLoader on the same logical template.
+/// MemoryLoader hits a HashMap; FsLoader hits the filesystem.
+/// The bench keeps the FsLoader template on a tmpfs-backed temp
+/// dir to avoid I/O dominating, so what we measure is the
+/// loader-trait dispatch overhead + the page-render path.
+fn benchmark_loader_memory_vs_fs(c: &mut Criterion) {
+    use std::collections::HashMap;
+    let body = "<html><body>{{name}}</body></html>";
+    let mut ctx = Context::new();
+    ctx.set("name".to_string(), "Ada".to_string());
+
+    // MemoryLoader engine.
+    let mut store = HashMap::new();
+    let _ = store.insert("page".to_string(), body.to_string());
+    let mut mem_engine = Engine::with_loader(
+        Arc::new(MemoryLoader::new(store)),
+        Duration::from_secs(60),
+    );
+    mem_engine.set_max_cache_size(0);
+
+    let _ = c.bench_function("loader_memory_render_page", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                mem_engine
+                    .render_page(black_box(&ctx), black_box("page"))
+                    .expect("render_page"),
+            );
+        });
+    });
+
+    // FsLoader engine. Use tempfile so the bench is hermetic.
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("page.html"), body).unwrap();
+    let mut fs_engine = Engine::new(
+        dir.path().to_str().unwrap(),
+        Duration::from_secs(60),
+    );
+    fs_engine.set_max_cache_size(0);
+
+    let _ = c.bench_function("loader_fs_render_page", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                fs_engine
+                    .render_page(black_box(&ctx), black_box("page"))
+                    .expect("render_page"),
+            );
+        });
+    });
+}
+
+/// `json` filter throughput on a representative payload (List of
+/// 100 small strings). Feature-gated; only registered when the
+/// `json` feature is on.
+#[cfg(feature = "json")]
+fn benchmark_json_filter(c: &mut Criterion) {
+    let engine = Engine::new("", Duration::from_secs(60));
+    let mut ctx = Context::new();
+    let items: Vec<String> =
+        (0..100).map(|i| format!("item-{i:03}")).collect();
+    ctx.set_value("items".to_string(), items);
+
+    let _ = c.bench_function("filter_json_list_100", |b| {
+        b.iter(|| {
+            let _ = black_box(
+                engine
+                    .render_template(
+                        black_box("{{ items | json | safe }}"),
+                        black_box(&ctx),
+                    )
+                    .expect("render"),
+            );
+        });
+    });
+}
+
+/// Fallback when the `json` feature is off — keeps the
+/// criterion_group! list compile-clean across feature configs.
+#[cfg(not(feature = "json"))]
+fn benchmark_json_filter(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     benchmark_template_rendering,
@@ -295,5 +522,11 @@ criterion_group!(
     benchmark_render_inheritance,
     benchmark_render_partial_in_each,
     benchmark_custom_filter_vs_builtin,
+    benchmark_render_range_iteration,
+    benchmark_render_page_cache_hit_vs_miss,
+    benchmark_whitespace_control,
+    benchmark_filter_chain_scaling,
+    benchmark_loader_memory_vs_fs,
+    benchmark_json_filter,
 );
 criterion_main!(benches);
