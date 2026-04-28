@@ -77,13 +77,32 @@ struct RenderArgs {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let out = dispatch(&args, &mut std::io::stdin());
+    run(
+        std::env::args().skip(1).collect(),
+        &mut std::io::stdin(),
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+}
+
+/// Process-runner core. Pulled out of `main` so the same logic can
+/// be exercised in-process by unit tests that pass synthetic
+/// readers and writers — coverage tools (notably `cargo tarpaulin`
+/// in CI) don't instrument the binary launched by subprocess
+/// integration tests, so this in-process path is what closes the
+/// coverage loop on the CLI's terminal-write branches.
+fn run<R: Read, O: std::io::Write, E: std::io::Write>(
+    args: Vec<String>,
+    stdin: &mut R,
+    stdout: &mut O,
+    stderr: &mut E,
+) -> ExitCode {
+    let out = dispatch(&args, stdin);
     if !out.stdout.is_empty() {
-        print!("{}", out.stdout);
+        let _ = stdout.write_all(out.stdout.as_bytes());
     }
     if !out.stderr.is_empty() {
-        eprint!("{}", out.stderr);
+        let _ = stderr.write_all(out.stderr.as_bytes());
     }
     ExitCode::from(out.exit)
 }
@@ -395,5 +414,93 @@ mod tests {
     fn parse_render_args_treats_dash_as_template() {
         let parsed = parse_render_args(&s(&["-"])).unwrap();
         assert_eq!(parsed.template_arg.as_deref(), Some("-"));
+    }
+
+    // ── run() entry point: covers main's terminal-write branches
+
+    #[test]
+    fn run_help_writes_to_stdout_and_exits_zero() {
+        let mut stdin = Cursor::new(Vec::<u8>::new());
+        let mut stdout: Vec<u8> = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+        let exit =
+            run(s(&["--help"]), &mut stdin, &mut stdout, &mut stderr);
+        assert_eq!(
+            format!("{exit:?}"),
+            "ExitCode(unix_exit_status(0))"
+        );
+        let s_out = String::from_utf8(stdout).unwrap();
+        assert!(s_out.contains("USAGE"), "{s_out}");
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn run_unknown_subcommand_writes_to_stderr_with_exit_2() {
+        let mut stdin = Cursor::new(Vec::<u8>::new());
+        let mut stdout: Vec<u8> = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+        let exit =
+            run(s(&["nope"]), &mut stdin, &mut stdout, &mut stderr);
+        assert_eq!(
+            format!("{exit:?}"),
+            "ExitCode(unix_exit_status(2))"
+        );
+        assert!(stdout.is_empty());
+        let s_err = String::from_utf8(stderr).unwrap();
+        assert!(s_err.contains("unknown subcommand"), "{s_err}");
+    }
+
+    #[test]
+    fn run_render_writes_template_output_to_stdout() {
+        let mut stdin = Cursor::new(b"Hi {{name}}!".to_vec());
+        let mut stdout: Vec<u8> = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+        let exit = run(
+            s(&["render", "-", "--set", "name=Ada"]),
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(
+            format!("{exit:?}"),
+            "ExitCode(unix_exit_status(0))"
+        );
+        assert_eq!(stdout, b"Hi Ada!");
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn run_render_error_writes_to_stderr_with_exit_1() {
+        let mut stdin = Cursor::new(b"{{missing}}".to_vec());
+        let mut stdout: Vec<u8> = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+        let exit = run(
+            s(&["render", "-"]),
+            &mut stdin,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(
+            format!("{exit:?}"),
+            "ExitCode(unix_exit_status(1))"
+        );
+        assert!(stdout.is_empty());
+        let s_err = String::from_utf8(stderr).unwrap();
+        assert!(s_err.contains("missing"), "{s_err}");
+    }
+
+    #[test]
+    fn run_empty_args_writes_help_to_stderr_with_exit_2() {
+        let mut stdin = Cursor::new(Vec::<u8>::new());
+        let mut stdout: Vec<u8> = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+        let exit = run(s(&[]), &mut stdin, &mut stdout, &mut stderr);
+        assert_eq!(
+            format!("{exit:?}"),
+            "ExitCode(unix_exit_status(2))"
+        );
+        assert!(stdout.is_empty());
+        let s_err = String::from_utf8(stderr).unwrap();
+        assert!(s_err.contains("USAGE"), "{s_err}");
     }
 }
