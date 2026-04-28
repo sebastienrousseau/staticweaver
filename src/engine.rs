@@ -4670,6 +4670,312 @@ mod tests {
         assert_eq!(ctx.get("count").map(String::as_str), Some("many"));
     }
 
+    // ── Signal propagation: #if / #block bubble Break/Continue up
+
+    #[test]
+    fn break_inside_if_propagates_up_to_each() {
+        // Hits the `if signal != FlowSignal::Done` arm inside #if.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "stop", "c"]);
+        let out = engine
+            .render_template(
+                "{{#each items}}\
+                 {{#if this == \"stop\"}}{{#break}}{{/if}}\
+                 [{{this}}]\
+                 {{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "[a]");
+    }
+
+    #[test]
+    fn continue_inside_if_propagates_up_to_each() {
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "skip", "c"]);
+        let out = engine
+            .render_template(
+                "{{#each items}}\
+                 {{#if this == \"skip\"}}{{#continue}}{{/if}}\
+                 [{{this}}]\
+                 {{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "[a][c]");
+    }
+
+    #[test]
+    fn break_inside_block_default_propagates_up_to_each() {
+        // Hits the `if signal != FlowSignal::Done` arm inside the
+        // #block default-body render (override path).
+        use std::collections::HashMap;
+        let mut store = HashMap::new();
+        let _ = store.insert(
+            "page".to_string(),
+            "{{#each items}}\
+             {{#block \"row\"}}\
+             {{#if this == \"stop\"}}{{#break}}{{/if}}\
+             [{{this}}]\
+             {{/block}}\
+             {{/each}}"
+                .to_string(),
+        );
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        );
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "stop", "c"]);
+        let out = engine.render_page(&ctx, "page").unwrap();
+        assert_eq!(out, "[a]");
+    }
+
+    // ── parse_filter_args quoting state machine
+
+    #[test]
+    fn filter_args_double_quoted_preserves_commas() {
+        // Hits the ('"', None) → in_quote = Some('"') branch.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "abc".to_string());
+        let out = engine
+            .render_template(r#"{{ s | replace:"a,b","x" }}"#, &ctx)
+            .unwrap();
+        // No commas inside the search needle, but the comma is
+        // protected by the double quotes — proves the state
+        // machine respects them.
+        assert_eq!(out, "abc");
+    }
+
+    #[test]
+    fn filter_args_single_quoted_preserves_commas() {
+        // Hits the ('\'', None) branch.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("s".to_string(), "abc".to_string());
+        let out = engine
+            .render_template("{{ s | replace:'a,b','x' }}", &ctx)
+            .unwrap();
+        assert_eq!(out, "abc");
+    }
+
+    // ── `is X` on non-path operands
+
+    #[test]
+    fn is_defined_on_non_path_operand_uses_null_check() {
+        // Hits the else branch in TestKind::Defined where the
+        // operand is not a Path. We use a math expression as the
+        // operand; the result is `Value::Number`, which is "defined"
+        // (not Null).
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("n".to_string(), 5i64);
+        let out = engine
+            .render_template(
+                "{{#if n + 1 is defined}}Y{{else}}N{{/if}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "Y");
+    }
+
+    // ── annotate_pos branches
+
+    #[test]
+    fn annotate_pos_on_unrelated_slice_returns_err_unchanged() {
+        // Synthetic slice that isn't part of `origin` → suffix is
+        // empty and the early-return `if suffix.is_empty()` arm
+        // fires (line ~2095).
+        let origin = "abc";
+        let synthetic = String::from("xyz");
+        let err = EngineError::Render("boom".to_string());
+        let wrapped = annotate_pos(err, origin, &synthetic);
+        // No position info appended.
+        assert_eq!(format!("{wrapped}"), "Render error: boom");
+    }
+
+    // ── split_else malformed-tag break path
+
+    #[test]
+    fn each_range_eval_failure_on_lo_propagates_with_pos() {
+        // Hits the .eval(active, self).map_err(|e| annotate_pos(e, origin, arg))
+        // arm on the `lo` side of a range — the parse succeeds but
+        // eval fails (division by zero). Position-suffix path is
+        // exercised too.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("z".to_string(), 0i64);
+        let err = engine
+            .render_template("{{#each 1 / z..5}}x{{/each}}", &ctx)
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("division by zero"), "{msg}");
+    }
+
+    #[test]
+    fn each_range_eval_failure_on_hi_propagates_with_pos() {
+        // Same arm but on the `hi` bound.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("z".to_string(), 0i64);
+        let err = engine
+            .render_template("{{#each 0..1 / z}}x{{/each}}", &ctx)
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("division by zero"), "{msg}");
+    }
+
+    #[test]
+    fn each_with_extract_block_failure_annotates_pos() {
+        // Hits the extract_block error -> annotate_pos arm
+        // (lines ~1249-1250) when #each has no matching {{/each}}.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b"]);
+        let err = engine
+            .render_template(
+                "header\n{{#each items}}body without close",
+                &ctx,
+            )
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("line 2"), "{msg}");
+    }
+
+    #[test]
+    fn block_extract_failure_annotates_pos() {
+        // Hits the extract_block error annotation arm inside #block
+        // dispatch (line ~1489-1490).
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err = engine
+            .render_template(
+                "before\n{{#block \"x\"}}body no close",
+                &ctx,
+            )
+            .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("line 2"), "{msg}");
+    }
+
+    #[test]
+    fn block_signal_propagation_inside_each() {
+        // Hits `if signal != FlowSignal::Done { return Ok(signal); }`
+        // inside the #block dispatch (line ~1512). #each catches
+        // the signal so the loop terminates cleanly.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("items".to_string(), vec!["a", "b"]);
+        let out = engine
+            .render_template(
+                "{{#each items}}\
+                 {{#block \"row\"}}\
+                 {{#break}}\
+                 [{{this}}]\
+                 {{/block}}\
+                 {{/each}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn partial_value_bareword_string_fallback() {
+        // Hits parse_partial_value's `_ => match s.parse::<i64>()`
+        // → `Err(_) => Value::String(...)` arm with a bareword
+        // that isn't a recognised keyword and doesn't parse as
+        // i64.
+        use std::collections::HashMap;
+        let mut store = HashMap::new();
+        let _ =
+            store.insert("p".to_string(), "got:{{label}}".to_string());
+        let engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        // `bareword` is not "true"/"false"/"null" and doesn't parse
+        // as i64 — it falls through to Value::String("bareword").
+        let out = engine
+            .render_template("{{> p label=bareword}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "got:bareword");
+    }
+
+    #[test]
+    fn partial_param_value_with_trailing_comma_in_bareword() {
+        // Same fallback path but exercising the bareword detection
+        // chain in parse_partial_params for a value that's neither
+        // quoted nor a typed literal.
+        use std::collections::HashMap;
+        let mut store = HashMap::new();
+        let _ = store.insert("p".to_string(), "got:{{x}}".to_string());
+        let engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine
+            .render_template("{{> p x=hello_world}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "got:hello_world");
+    }
+
+    #[test]
+    fn parse_block_name_bareword_fallthrough() {
+        // Hits the unquoted return arm of parse_block_name (line
+        // ~3210). Bareword block names are accepted unchanged.
+        use std::collections::HashMap;
+        let mut store = HashMap::new();
+        let _ = store.insert(
+            "page".to_string(),
+            "{{#block bareword}}body{{/block}}".to_string(),
+        );
+        let mut engine = Engine::with_loader(
+            Arc::new(MemoryLoader::new(store)),
+            Duration::from_secs(60),
+        );
+        let ctx = Context::new();
+        let out = engine.render_page(&ctx, "page").unwrap();
+        assert_eq!(out, "body");
+    }
+
+    #[test]
+    fn ws_control_block_comment_carve_out() {
+        // Hits parse_ws_control's early-return for `{{!-- ... --}}`
+        // (line ~3385). The `--` at the end must NOT be treated
+        // as a whitespace-control marker.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template("before{{!-- comment --}}after", &ctx)
+            .unwrap();
+        assert_eq!(out, "beforeafter");
+    }
+
+    #[test]
+    fn split_else_unclosed_inner_tag_does_not_panic() {
+        // Inside an #if body, an unclosed inner `{{` causes
+        // split_else's `else` arm with `find(close)` returning None
+        // — the helper breaks rather than panicking; the outer
+        // render path then surfaces the malformed-tag error.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set_value("ok".to_string(), true);
+        let err = engine
+            .render_template("{{#if ok}}body {{ unclosed{{/if}}", &ctx)
+            .unwrap_err();
+        // Just verify it errors cleanly rather than panicking.
+        assert!(
+            matches!(err, EngineError::InvalidTemplate(_)),
+            "{err:?}"
+        );
+    }
+
     // ── H7: Auto-escape per file extension ────────────────────────
 
     fn make_engine_with_two_pages() -> Engine {
