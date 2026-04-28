@@ -89,6 +89,43 @@ cargo run --example axum --features axum-example
 # then open http://127.0.0.1:3030/
 ```
 
+### [inheritance](inheritance.rs)
+Template inheritance: `{{#extends}}` + `{{#block}}` with `{{ super() }}`.
+Layered design where a base layout defines named blocks and a child
+overrides them, splicing the parent body in via `super()`.
+
+```bash
+cargo run --example inheritance
+```
+
+### [filters](filters.rs)
+Built-in filter pipeline (trim, uppercase, truncate, number_format,
+pad_start, repeat, slice) plus custom filters and tests registered via
+`Engine::add_filter` and `Engine::add_test`.
+
+```bash
+cargo run --example filters
+```
+
+### [loaders](loaders.rs)
+Pluggable template loaders: `FsLoader` (default, reads from disk),
+`MemoryLoader` (in-memory map for tests / embedded assets), and a
+custom `LiveLoader` that hot-mutates its template store at runtime.
+
+```bash
+cargo run --example loaders
+```
+
+### [control_flow](control_flow.rs)
+Expression language showcase: comparisons, booleans, math, string
+concat (`~`), postfix tests (`is X`), `#each` over List + range,
+`@index`/`@first`/`@last` helpers, `#break`/`#continue` loop control,
+and `#set` in-template assignment.
+
+```bash
+cargo run --example control_flow
+```
+
 ---
 
 ## Example Support

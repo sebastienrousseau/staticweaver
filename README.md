@@ -30,7 +30,7 @@
 - [Features](#features) -- capability matrix
 - [Library Usage](#library-usage) -- rendering, escaping, delimiters, caching, remote templates
 - [Configuration](#configuration) -- engine and cache options
-- [Examples](#examples) -- seven runnable examples
+- [Examples](#examples) -- eleven runnable examples
 - [Performance](#performance) -- benchmark matrix vs Tera, Minijinja, Askama
 - [Development](#development) -- make targets, CI
 - [Security](#security) -- safety guarantees
@@ -605,6 +605,10 @@ All examples live in `examples/` and use the shared `support.rs` helper for the 
 | `errors` | Every `EngineError` / `TemplateError` variant and its conversions |
 | `remote` | (feature-gated) `create_template_folder(Some(url))` against a local mock server. Run with `cargo run --example remote --features remote-templates`. |
 | `axum` | (feature-gated) End-to-end Axum web-server integration: render-to-`String`, render-to-`Vec<u8>` via `render_to`, per-request context. Run with `cargo run --example axum --features axum-example`. |
+| `inheritance` | `{{#extends}}` + `{{#block}}` + `{{ super() }}` showcase. Layered base/child layouts. |
+| `filters` | The 23 built-in filters plus a custom `slugify` filter and `is vip` test, registered via `add_filter` / `add_test`. |
+| `loaders` | `FsLoader` (default), `MemoryLoader` (in-memory), and a custom hot-mutable `LiveLoader` implementing the `TemplateLoader` trait. |
+| `control_flow` | Expression language, `{{#each list}}`, `{{#each 1..N}}`, `{{#break}}`, `{{#continue}}`, `{{#set}}`. |
 
 ---
 

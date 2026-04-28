@@ -189,6 +189,28 @@ name = "axum"
 path = "examples/axum.rs"
 required-features = ["axum-example"]
 
+[[example]]
+# {{#extends}} + {{#block}} + {{ super() }} showcase. Uses
+# MemoryLoader so the example is self-contained.
+name = "inheritance"
+path = "examples/inheritance.rs"
+
+[[example]]
+# Built-in + custom filter / test pipeline showcase.
+name = "filters"
+path = "examples/filters.rs"
+
+[[example]]
+# FsLoader / MemoryLoader / a custom hot-mutable loader
+# implementing TemplateLoader directly.
+name = "loaders"
+path = "examples/loaders.rs"
+
+[[example]]
+# Expression language + #each / range / break / continue / set.
+name = "control_flow"
+path = "examples/control_flow.rs"
+
 # -----------------------------------------------------------------------------
 # Criterion Benchmark
 # -----------------------------------------------------------------------------
