@@ -4926,6 +4926,49 @@ mod tests {
     }
 
     #[test]
+    fn set_assignment_bareword_falls_back_to_string() {
+        // Hits parse_literal_value's `Err(_) => Value::String(...)`
+        // fallback (line ~3186) — value isn't a quoted string,
+        // isn't `true`/`false`/`null`, and doesn't parse as i64.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template("{{#set tier = pro}}got:{{tier}}", &ctx)
+            .unwrap();
+        assert_eq!(out, "got:pro");
+    }
+
+    #[test]
+    fn set_assignment_with_quoted_string() {
+        // Hits parse_literal_value's quoted-string return arm
+        // (line ~3175-3177). Already covered by other tests but
+        // pinned here for completeness.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#set greeting = \"Hello\"}}{{greeting}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "Hello");
+    }
+
+    #[test]
+    fn set_assignment_with_single_quoted_string() {
+        // Same arm but single quotes.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let out = engine
+            .render_template(
+                "{{#set greeting = 'Hi'}}{{greeting}}",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "Hi");
+    }
+
+    #[test]
     fn parse_block_name_bareword_fallthrough() {
         // Hits the unquoted return arm of parse_block_name (line
         // ~3210). Bareword block names are accepted unchanged.
