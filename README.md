@@ -700,45 +700,270 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 
 ## FAQ
 
+### Choosing the right tool
+
+<details>
+<summary><b>When should I pick staticweaver vs Tera, Minijinja, Handlebars, or Askama?</b></summary>
+
+| You need… | Pick |
+| :--- | :--- |
+| Compile-time-checked templates with zero runtime parsing | **Askama** (different ergonomics — templates become Rust types) |
+| Rich Jinja2 feature set (macros, custom filters w/ Tera args, i18n hooks) | **Tera** |
+| Bytecode VM and the absolute fastest runtime engine for complex templates | **Minijinja** |
+| Mustache compatibility for porting templates between languages | **Handlebars** or **staticweaver** |
+| **Small (`#![forbid(unsafe_code)]`), Tera-style expressions + inheritance with `super()`, SIMD HTML escape, MSRV 1.68, networking is opt-in** | **staticweaver** |
+
+The realistic differentiator: staticweaver is the only Rust template engine that combines `#![forbid(unsafe_code)]` with full inheritance + `super()`, range iteration, custom filters/tests, pluggable loaders, and SIMD escape — and stays small enough (~5k LoC engine) to read in an afternoon. See the [comparison table](#when-to-choose-staticweaver).
+
+</details>
+
+<details>
+<summary><b>Is it production-ready? What's the stability story?</b></summary>
+
+`v0.0.2` is the first release that goes beyond Mustache-tier substitution. It's tested with **460+ tests** (lib, integration, snapshot, differential vs Minijinja, property-based via proptest), **99% line coverage**, and a **comparative bench matrix** vs Tera/Minijinja/Askama. Cross-platform CI runs on Linux, macOS, and Windows. `#![forbid(unsafe_code)]` is enforced at the crate root.
+
+That said — it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.2"`) if you want to control upgrades manually.
+
+</details>
+
+### Using the library
+
+<details>
+<summary><b>Why does `render_page` return <code>EngineError::Render</code> for a missing key, but <code>{{#if x}}</code> happily evaluates a missing key?</b></summary>
+
+Two different contracts:
+
+- **Substitution** (`{{x}}`) is strict — a missing key is a programming error and the engine refuses to silently render the empty string.
+- **Conditionals** (`{{#if x}}`) are lenient — missing keys evaluate to `Value::Null`, which is falsy. This matches Jinja/Tera and lets you write `{{#if optional_thing}}…{{/if}}` without pre-checking.
+
+Distinguish "missing" from "explicitly `Null`" via `{{#if x is defined}}` (key exists in the context, even if its value is `Null`) vs `{{#if x is none}}` (value is exactly `Null`). The `is defined` test only returns `true` when `Context::get_path()` resolves the key.
+
+</details>
+
+<details>
+<summary><b>How do I escape <code>{{</code> in the output?</b></summary>
+
+Three ways:
+
+1. **Backslash-escape**: `\{{literal}}` emits `{{literal}}` verbatim. Even-length runs collapse to literal backslashes, odd-length runs escape the following delimiter.
+2. **Custom delimiters**: `engine.set_delimiters("<%", "%>")` swaps `{{` for any pair you like — useful when generating templates *for* another templating engine.
+3. **Substitute the literal**: `{{open}}` with `ctx.set("open", "{{".to_string())`.
+
+</details>
+
+<details>
+<summary><b>How do I disable HTML escaping for one tag, vs globally, vs per file extension?</b></summary>
+
+| Scope | How |
+| :--- | :--- |
+| **Per-tag** (raw output) | `{{!key}}` or `{{ key \| safe }}` (the trailing `safe` filter) |
+| **Globally** (non-HTML output) | `Engine::new(...).with_html_escape(false)` |
+| **Per file extension** (HTML pages escape, `.txt` doesn't) | `engine.autoescape_on(&[".html", ".xml"])` |
+
+The default is "escape everything via SIMD entity encoding (5-character OWASP set: `& < > " '`)". `/` is *not* escaped — Minijinja escapes `/` defensively, we don't, by design (matches Askama).
+
+</details>
+
+<details>
+<summary><b>How do I share an engine across threads / async tasks?</b></summary>
+
+Wrap it in `Arc`. The engine is `Send + Sync` and `render_template` is `&self`:
+
+```rust,ignore
+use std::sync::Arc;
+use staticweaver::{Context, Engine};
+use std::time::Duration;
+
+let engine = Arc::new(Engine::new("templates", Duration::from_secs(60)));
+let mut ctx = Context::new();
+ctx.set("name".to_string(), "Ada".to_string());
+
+// Each task gets a cheap clone of the Arc.
+let e = engine.clone();
+tokio::spawn(async move {
+    let _ = e.render_template("hello {{name}}", &ctx);
+});
+```
+
+`render_page` is `&mut self` because of the page cache, so for shared use either wrap in a `Mutex<Engine>` or call `render_template` directly with the layout body you've loaded yourself.
+
+</details>
+
+<details>
+<summary><b>Can I use it with Axum, Actix, Rocket, or Warp?</b></summary>
+
+Yes — render to a `String` (`render_template`/`render_page`) or stream into the response body (`render_to`/`render_page_to` accepts any `io::Write`). There is no framework integration layer because none is needed; the engine is a pure function over `(template, context) -> String`.
+
+A working Axum example with three integration patterns (`Html<String>`, `Vec<u8>` via `render_to`, per-request context from path params) lives in [`examples/axum.rs`](examples/axum.rs). Run it with `cargo run --example axum --features axum-example`.
+
+</details>
+
 <details>
 <summary><b>Is staticweaver async?</b></summary>
 
-No. The render path is synchronous. The remote-template downloader (behind the `remote-templates` feature) uses blocking `reqwest`. If you need to fetch templates from inside an async task, call `create_template_folder` from `tokio::task::spawn_blocking`.
+No. The render path is synchronous and CPU-bound — there is no I/O on the hot path (the page cache and any `TemplateLoader::load` calls happen before the parser starts). `render_to` works against an `io::Write` (sync) sink.
+
+The opt-in remote-template downloader uses blocking `reqwest` (gated behind the `remote-templates` cargo feature). If you need to fetch templates from inside an async task, call `create_template_folder` from `tokio::task::spawn_blocking`.
+
+Why no async render? Because it would buy nothing — the workload is parser + tree-walk, not network. Forcing an async runtime onto callers who don't need one is a net loss in dependency weight and complexity.
 
 </details>
 
 <details>
-<summary><b>Does it support template inheritance?</b></summary>
+<summary><b>How do I plug in a custom template backend (database, embedded asset, S3)?</b></summary>
 
-Yes. `{{#extends "base"}}` plus `{{#block "name"}}…{{/block}}` works with multi-level chains; the child wins on conflicting block names. See the [Templating Language](#templating-language) section.
+Implement [`TemplateLoader`](https://docs.rs/staticweaver/latest/staticweaver/engine/trait.TemplateLoader.html) and pass it to `Engine::with_loader`:
+
+```rust
+use staticweaver::engine::{Engine, TemplateLoader};
+use staticweaver::EngineError;
+use std::sync::Arc;
+use std::time::Duration;
+
+struct DatabaseLoader { /* db handle */ }
+impl TemplateLoader for DatabaseLoader {
+    fn load(&self, name: &str) -> Result<String, EngineError> {
+        // SELECT body FROM templates WHERE name = $1
+        Ok("...".to_string())
+    }
+}
+
+let engine = Engine::with_loader(
+    Arc::new(DatabaseLoader { /* … */ }),
+    Duration::from_secs(60),
+);
+```
+
+The trait is `Send + Sync` so the loader composes cleanly with shared engines. `MemoryLoader` is provided for tests / embedded asset bundles. See [`examples/loaders.rs`](examples/loaders.rs) for a runnable hot-mutable backend.
 
 </details>
 
 <details>
-<summary><b>How is it different from Tera or Handlebars?</b></summary>
+<summary><b>How do I add a custom filter or test?</b></summary>
 
-`#![forbid(unsafe_code)]`, MSRV 1.68, no networking in the default build, and a small (~700 LoC) recursive-descent expression evaluator that covers comparisons, booleans, integer math, and the `is defined` / `is empty` / `is none` postfix tests. See the [comparison table](#when-to-choose-staticweaver).
+`Engine::add_filter` for filters (`{{ x | name:arg }}`); `Engine::add_test` for tests (`{{#if x is name}}`). Both take `Arc<Fn>` closures and override built-ins of the same name — useful for replacing `uppercase` with a locale-aware version, or `defined` with a stricter notion of "set":
+
+```rust
+use staticweaver::{Context, Engine};
+use staticweaver::context::Value;
+use std::sync::Arc;
+use std::time::Duration;
+
+let mut engine = Engine::new("", Duration::from_secs(60));
+
+engine.add_filter(
+    "slugify",
+    Arc::new(|input, _args| Ok(input.to_lowercase().replace(' ', "-"))),
+);
+
+engine.add_test(
+    "admin",
+    Arc::new(|v: &Value, _args| {
+        Ok(matches!(v, Value::String(s) if s == "admin"))
+    }),
+);
+```
+
+See [`examples/filters.rs`](examples/filters.rs) for a runnable showcase.
 
 </details>
 
 <details>
-<summary><b>Can I use it with Axum or Actix?</b></summary>
+<summary><b>How does the cache work and when does it invalidate?</b></summary>
 
-Yes — render to a `String`, then return it. There is no framework integration layer because none is needed; the engine is a pure function over `(template, context)`.
+Only `render_page` caches. The cache key is `"{layout}:{Context::hash()}"` — `Context::hash()` is order-independent (XOR-combined per entry) so two contexts with the same logical contents always hit the same entry, regardless of insertion order.
+
+Eviction is **true LRU**: when the cache reaches its capacity bound, the least-recently-used entry is evicted on the next insert. `Cache::get` bumps access recency, so frequently-rendered pages stay hot. TTL expiration is also enforced — `Cache::get` returns `None` once the per-entry deadline passes.
+
+`render_template` is **uncached** — it's a pure function, no state. If you need it cached, do that one level up.
+
+To invalidate: `engine.clear_cache()` drops everything. `engine.set_max_cache_size(n)` shrinks the cap; entries above the new cap are evicted on the next insert.
+
+See the [Caching](#caching) section in Library Usage for details and [`PERFORMANCE.md`](PERFORMANCE.md) for hit-vs-miss benchmark numbers (~6.7× faster on a hit).
 
 </details>
 
 <details>
-<summary><b>How are missing values rendered?</b></summary>
+<summary><b>What's the performance compared to other engines?</b></summary>
 
-A missing key in `render_template` returns `EngineError::Render`. Inside `{{#if}}`, a missing path evaluates to `Value::Null` (which is falsy). Use `{{#if x is defined}}` to distinguish "missing" from "explicit `Null`".
+On Apple M-series with full-quality `cargo bench --bench comparative`:
+
+- **Beats Tera** by 3.3× on `escape_heavy` (10 KB body with 5% HTML metacharacters).
+- **Matches Askama** on `escape_heavy` (23.3 µs vs 23.2 µs) — SIMD escape via `askama_escape` closes the gap with compile-time codegen on long inputs.
+- **Wins or ties Minijinja** on 4 of 7 workloads (`simple_sub`, `many_sub_32`, `escape_heavy`, `filter_chain`).
+- Loses to Minijinja by 2.5–3.8× on hot loops (`each_1000`, `if_chain`) — closing that gap would require a bytecode compiler, which we explicitly chose not to add to keep the engine small.
+
+Full numbers + reproduction instructions in [`PERFORMANCE.md`](PERFORMANCE.md). Run `cargo bench --bench comparative` on your own hardware to validate.
+
+</details>
+
+### Errors and debugging
+
+<details>
+<summary><b>How do I get useful error messages?</b></summary>
+
+Every user-facing error from `render_template` / `render_page` carries `at line N, column M`:
+
+```text
+Render error: Unresolved template tag: missing at line 2, column 9
+Invalid template: Unclosed template tag at line 5, column 12
+Render error: #each: unresolved list `posts` at line 7, column 14
+```
+
+The position points at the offending byte in the *original* template — for partials and `{{#extends}}` chains, the position refers to the included file, not the parent template. Errors thrown from inside `Engine::add_filter` / `add_test` closures preserve your error message verbatim and append the position from the call site.
 
 </details>
 
 <details>
-<summary><b>What is the cache key for `render_page`?</b></summary>
+<summary><b>The engine panicked / crashed on weird input — is that a bug?</b></summary>
 
-`"{layout}:{Context::hash()}"`. `Context::hash` is order-independent, so two contexts with the same logical contents hit the same cache entry regardless of insertion order.
+It would be. The engine is fuzzed via [proptest](tests/proptest_parser.rs) — 6 properties × 256 cases each (~1500 random inputs per `cargo test`) — asserting that arbitrary text, malformed tags, random expressions, and edge-case math (full `i64` range × all four ops) **never panic**. Bad inputs are *errors*, not panics.
+
+If you find input that panics: please file an issue at <https://github.com/sebastienrousseau/staticweaver/issues> with the template + context. We'll add it to the proptest harness so it can never regress.
+
+</details>
+
+<details>
+<summary><b>I want to test my templates without writing a Rust harness — how?</b></summary>
+
+`cargo install staticweaver` ships a CLI binary:
+
+```bash
+staticweaver render hello.html --set name=Ada --set greeting=Hi
+echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
+```
+
+`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape. Errors exit non-zero with the message on stderr. See `staticweaver --help` for the full reference.
+
+</details>
+
+### Versioning + maintenance
+
+<details>
+<summary><b>What's the MSRV and what controls it?</b></summary>
+
+**MSRV is 1.68.** The floor is set by `thiserror 2.0` (`Error` derive macro), `regex 1.12`, and `serde_json 1.0.149` — not by anything we use directly. Bumping MSRV is a breaking change for downstream consumers, so we only do it when an upstream dep forces our hand.
+
+Stable Rust only — we don't use any nightly features.
+
+</details>
+
+<details>
+<summary><b>Does it pull in OpenSSL / heavy networking deps?</b></summary>
+
+**No, by default.** The default build has:
+
+- **Zero networking.** No `reqwest`, no TLS, no `openssl`.
+- **Five direct runtime deps**: `fnv` (hashing), `askama_escape` (SIMD escape), `tempfile` (only used by the feature-gated remote downloader), `thiserror` (error derive), and that's it.
+
+Networking is gated behind the `remote-templates` feature. Even when enabled, `reqwest` uses `rustls-tls-native-roots` (no OpenSSL pull-in). The `json` and `axum-example` features each gate their own deps. You only pay for what you use.
+
+</details>
+
+<details>
+<summary><b>Can I depend on it from a `no_std` project?</b></summary>
+
+Not currently — we use `std::collections::HashMap`, `std::fs`, `std::io::Write`. Adding `no_std` support would require routing all `String` allocations through a hashable allocator and stubbing the filesystem-backed `FsLoader`. If you have a concrete use case, file an issue.
 
 </details>
 

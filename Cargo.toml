@@ -11,7 +11,10 @@ edition = "2021"                            # Rust edition being used
 rust-version = "1.68"                       # MSRV (floor driven by thiserror 2.0 + regex 1.11 + serde_json 1.0)
 license = "MIT OR Apache-2.0"               # Dual licensing strategy
 description = """
-A powerful and flexible static site generator and templating engine for Rust.
+Small, safe, fast templating engine for Rust. Mustache-compatible \
+syntax with Tera-style expressions, inheritance with super(), 23 \
+built-in filters, custom filters/tests, pluggable loaders, SIMD HTML \
+escape that matches Askama, line:col error messages, zero unsafe code.
 """                                         # Short library description
 homepage = "https://staticweaver.com/"             # Project's homepage URL
 documentation = "https://staticweaver.com/documentation/index.html" # Doc URL
