@@ -70,9 +70,9 @@ dependencies = [
 
 [[package]]
 name = "askama_escape"
-version = "0.10.3"
+version = "0.15.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "619743e34b5ba4e9703bba34deac3427c72507c7159f5fd030aea8cac0cfe341"
+checksum = "9052d81ace9a973fdd8d9c35e8d06e6338945fbf462c7fa72ed4f0767d6a0d4b"
 
 [[package]]
 name = "askama_macros"
