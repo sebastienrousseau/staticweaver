@@ -66,7 +66,7 @@ async fn main() {
             }),
         )
         .route(
-            "/hello/:name",
+            "/hello/{name}",
             get({
                 let engine = engine.clone();
                 move |path: AxumPath<String>| {
