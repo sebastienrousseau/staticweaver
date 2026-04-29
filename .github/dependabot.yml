@@ -11,6 +11,14 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    # askama_escape 0.15 switched HTML output from named entities
+    # (`&lt;`, `&gt;`, `&amp;`, `&quot;`, `&#x27;`) to numeric character
+    # references (`&#60;`, `&#62;`, `&#38;`, `&#34;`, `&#39;`). Both are
+    # valid HTML, but the change is user-visible in rendered bytes.
+    # Pin to 0.10.x until we deliberately migrate as a breaking change.
+    ignore:
+      - dependency-name: "askama_escape"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     labels: ["dependencies", "rust"]
     commit-message:
       prefix: "chore(deps)"
