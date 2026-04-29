@@ -136,7 +136,7 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 # axum + tokio: only used by examples/axum.rs, gated behind the
 # `axum-example` feature. Adds zero weight to the default library
 # build because they're optional dependencies.
-axum = { version = "0.7", optional = true }
+axum = { version = "0.8", optional = true }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"], optional = true }
 
 # serde_json: only used by the `json` filter, gated behind the
