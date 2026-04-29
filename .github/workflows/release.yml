@@ -19,7 +19,17 @@ on:
         default: true
         type: boolean
 
-permissions: {}
+# The reusable workflow at sebastienrousseau/pipelines requires
+# `contents: write` (to create the GitHub release + tag artifacts),
+# `id-token: write` (Sigstore / Trusted Publishing OIDC), and
+# `attestations: write` (build provenance). Reusable-workflow
+# permissions cannot exceed the caller's, so we grant the union
+# explicitly here. Per-job specifics (e.g. read-only verify) are
+# scoped further in each job below.
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: release-${{ github.ref }}
