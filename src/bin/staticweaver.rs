@@ -77,12 +77,13 @@ struct RenderArgs {
 }
 
 fn main() -> ExitCode {
-    run(
+    let exit = run(
         std::env::args().skip(1).collect(),
         &mut std::io::stdin(),
         &mut std::io::stdout(),
         &mut std::io::stderr(),
-    )
+    );
+    ExitCode::from(exit)
 }
 
 /// Process-runner core. Pulled out of `main` so the same logic can
@@ -91,12 +92,18 @@ fn main() -> ExitCode {
 /// in CI) don't instrument the binary launched by subprocess
 /// integration tests, so this in-process path is what closes the
 /// coverage loop on the CLI's terminal-write branches.
+///
+/// Returns the exit code as `u8` (not `std::process::ExitCode`)
+/// so unit tests can compare against an integer literal —
+/// `ExitCode`'s `Debug` format is platform-specific (Windows
+/// shows it differently from Unix), and the type doesn't expose
+/// the underlying byte.
 fn run<R: Read, O: std::io::Write, E: std::io::Write>(
     args: Vec<String>,
     stdin: &mut R,
     stdout: &mut O,
     stderr: &mut E,
-) -> ExitCode {
+) -> u8 {
     let out = dispatch(&args, stdin);
     if !out.stdout.is_empty() {
         let _ = stdout.write_all(out.stdout.as_bytes());
@@ -104,7 +111,7 @@ fn run<R: Read, O: std::io::Write, E: std::io::Write>(
     if !out.stderr.is_empty() {
         let _ = stderr.write_all(out.stderr.as_bytes());
     }
-    ExitCode::from(out.exit)
+    out.exit
 }
 
 /// Top-level subcommand dispatch. `stdin_reader` is plumbed so unit
@@ -425,10 +432,7 @@ mod tests {
         let mut stderr: Vec<u8> = Vec::new();
         let exit =
             run(s(&["--help"]), &mut stdin, &mut stdout, &mut stderr);
-        assert_eq!(
-            format!("{exit:?}"),
-            "ExitCode(unix_exit_status(0))"
-        );
+        assert_eq!(exit, 0);
         let s_out = String::from_utf8(stdout).unwrap();
         assert!(s_out.contains("USAGE"), "{s_out}");
         assert!(stderr.is_empty());
@@ -441,10 +445,7 @@ mod tests {
         let mut stderr: Vec<u8> = Vec::new();
         let exit =
             run(s(&["nope"]), &mut stdin, &mut stdout, &mut stderr);
-        assert_eq!(
-            format!("{exit:?}"),
-            "ExitCode(unix_exit_status(2))"
-        );
+        assert_eq!(exit, 2);
         assert!(stdout.is_empty());
         let s_err = String::from_utf8(stderr).unwrap();
         assert!(s_err.contains("unknown subcommand"), "{s_err}");
@@ -461,10 +462,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
         );
-        assert_eq!(
-            format!("{exit:?}"),
-            "ExitCode(unix_exit_status(0))"
-        );
+        assert_eq!(exit, 0);
         assert_eq!(stdout, b"Hi Ada!");
         assert!(stderr.is_empty());
     }
@@ -480,10 +478,7 @@ mod tests {
             &mut stdout,
             &mut stderr,
         );
-        assert_eq!(
-            format!("{exit:?}"),
-            "ExitCode(unix_exit_status(1))"
-        );
+        assert_eq!(exit, 1);
         assert!(stdout.is_empty());
         let s_err = String::from_utf8(stderr).unwrap();
         assert!(s_err.contains("missing"), "{s_err}");
@@ -495,10 +490,7 @@ mod tests {
         let mut stdout: Vec<u8> = Vec::new();
         let mut stderr: Vec<u8> = Vec::new();
         let exit = run(s(&[]), &mut stdin, &mut stdout, &mut stderr);
-        assert_eq!(
-            format!("{exit:?}"),
-            "ExitCode(unix_exit_status(2))"
-        );
+        assert_eq!(exit, 2);
         assert!(stdout.is_empty());
         let s_err = String::from_utf8(stderr).unwrap();
         assert!(s_err.contains("USAGE"), "{s_err}");
