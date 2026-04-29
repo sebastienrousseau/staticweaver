@@ -1,0 +1,36 @@
+#!/bin/sh
+# Repo-local commit-msg hook. Installed by `make init` via:
+#   git config core.hooksPath .githooks
+#
+# Purpose: validate that the commit message looks like Conventional
+# Commits (type(scope): subject). Leaves the `Assisted-by:` trailer
+# handling to the user-global hook — if one exists it has already run
+# (git invokes `commit-msg` once; the user's global hook can be chained
+# by setting that user's own `core.hooksPath` to a composite).
+#
+# POSIX sh only.
+set -eu
+
+msg_file="$1"
+first_line="$(head -n 1 "$msg_file" | sed 's/#.*$//')"
+
+# Skip fixup/squash/revert commits and empty lines.
+case "$first_line" in
+    fixup!*|squash!*|amend!*|'') exit 0 ;;
+    'Revert "'*|'Merge '*)       exit 0 ;;
+esac
+
+# Conventional Commits: <type>[optional scope][!]: <description>
+# Minimal check — match the types used in this repo's history plus a few
+# common additions. Refuses anything that doesn't start with a known
+# type and a colon.
+if ! printf '%s' "$first_line" | grep -Eq \
+    '^(feat|fix|docs|chore|refactor|perf|test|build|ci|revert|style)(\([a-z0-9._-]+\))?!?: .+'; then
+    printf 'error: commit subject must follow Conventional Commits.\n' >&2
+    printf '  got:      %s\n' "$first_line" >&2
+    printf '  expected: %s\n' 'feat(scope): description' >&2
+    printf '  types:    feat|fix|docs|chore|refactor|perf|test|build|ci|revert|style\n' >&2
+    exit 1
+fi
+
+exit 0

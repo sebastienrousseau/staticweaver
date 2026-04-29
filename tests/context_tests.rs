@@ -1,3 +1,5 @@
+//! Integration tests for the `Context` struct.
+
 use staticweaver::Context;
 
 /// Unit tests for Context operations.

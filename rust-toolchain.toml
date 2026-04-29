@@ -1,0 +1,8 @@
+# Rustup auto-fetches this toolchain on the first `cargo` invocation in a
+# fresh checkout. Pinned to `stable` rather than a specific version so
+# routine Rust releases flow through without requiring a manual bump here;
+# the declared MSRV in Cargo.toml (`rust-version`) remains the contract.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

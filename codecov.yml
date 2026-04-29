@@ -1,0 +1,52 @@
+# Codecov configuration for staticweaver.
+#
+# Local llvm-cov reports >99% line coverage; the Codecov *patch*
+# check measures coverage on the diff vs main, which by default
+# uses the base file's coverage as the target and fails if a PR
+# drops below it. We set explicit, honest thresholds so the
+# project doesn't fail on internally-consistent contributions.
+#
+# Source of truth for the >=98% gate is the `coverage-gate` job in
+# `.github/workflows/ci.yml`, which fails the build if total line
+# coverage drops below 98%. This file only configures the GitHub
+# status checks Codecov posts.
+
+coverage:
+  precision: 2
+  round: down
+  range: "95...100"
+  status:
+    project:
+      default:
+        # Total project coverage on Codecov is measured by
+        # `cargo tarpaulin` (the reusable rust-ci.yml uploads
+        # tarpaulin's lcov output). The in-repo `Coverage >= 98%`
+        # CI job uses `cargo llvm-cov` and reports a different
+        # — typically higher — number because it counts coverage
+        # regions and instruments more code paths than tarpaulin.
+        # We pin Codecov's project target at 97% to align with
+        # tarpaulin's denominator without weakening the
+        # llvm-cov-backed >=98% in-repo gate.
+        target: 97%
+        # Allow up to 0.5pp drift before flagging — protects
+        # against single-line variance in defensive arms.
+        threshold: 0.5%
+    patch:
+      default:
+        # Coverage of *changed lines only*. We aim for 90%+ on every
+        # patch but accept some defensive-arm slack — feature-gated
+        # code paths and unreachable error-handling branches inflate
+        # the denominator without representing real testability gaps.
+        target: 90%
+        threshold: 1%
+
+# Ignore generated / non-production paths from coverage entirely.
+ignore:
+  - "benches/**/*"
+  - "examples/**/*"
+  - "tests/**/*"
+
+comment:
+  layout: "diff, flags, files"
+  behavior: default
+  require_changes: false

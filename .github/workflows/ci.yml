@@ -1,0 +1,116 @@
+# Unified CI Pipeline
+# Uses reusable workflows from sebastienrousseau/pipelines
+# Replaces: audit.yml, check.yml, lint.yml, test.yml, coverage.yml
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "feat/**"
+  pull_request:
+    branches:
+      - main
+      - "feat/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Rust CI
+    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@99a39f7d02e76beb2b935fa07b7cd6a46d8bbc65
+    with:
+      rust-version: 'stable'
+      run-clippy: true
+      run-fmt: true
+      run-audit: true
+      run-coverage: true
+      # Fan out test runs to macOS + Windows runners. Keeps cross-platform
+      # regressions (path separators, line endings, TLS backends, …) out
+      # of the tree before merge.
+      run-cross-platform: true
+    secrets: inherit
+
+  # Nightly toolchain tests (optional, continue on error)
+  test-nightly:
+    name: Test (nightly)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --all-features
+
+  # Line-coverage floor. The reusable `rust-ci.yml` already reports to
+  # Codecov; this job additionally enforces a hard gate inside the repo
+  # so a coverage regression fails the PR directly, without waiting on
+  # Codecov status-check propagation.
+  coverage-gate:
+    name: Coverage >= 98%
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        run: cargo install --locked cargo-llvm-cov
+      - name: Measure + enforce
+        run: |
+          set -euo pipefail
+          summary="$(cargo llvm-cov --all-features --summary-only 2>&1)"
+          echo "$summary"
+          cov="$(printf '%s\n' "$summary" \
+                 | awk '/^TOTAL/ {for (i=1;i<=NF;i++) if ($i ~ /%$/) last=$i} END {gsub("%","",last); print last}')"
+          echo "line coverage: ${cov}%"
+          awk -v c="$cov" 'BEGIN {exit !(c+0 >= 98.0)}' \
+            || { echo "::error::line coverage ${cov}% below 98% floor"; exit 1; }
+
+  # Documentation build + coverage gate. Docs are published by docs.rs on
+  # release; this job only smoke-tests that the crate documents cleanly
+  # (no broken links, no missing docs) and keeps example coverage at 100%.
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust nightly (for --show-coverage)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build docs (all features, strict)
+        env:
+          RUSTDOCFLAGS: "-D warnings -D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"
+        run: cargo doc --no-deps --all-features
+
+      - name: Run doctests (all features)
+        run: cargo test --doc --all-features
+
+      - name: Enforce 100% doc-example coverage
+        run: |
+          set -euo pipefail
+          output="$(cargo +nightly rustdoc --lib --all-features -- \
+            -Z unstable-options --show-coverage 2>&1 | tee /dev/stderr)"
+          total="$(printf '%s\n' "$output" | awk '/^\| Total/ {print $(NF-1)}')"
+          echo "Overall example coverage: ${total}"
+          if [ "${total}" != "100.0%" ]; then
+            echo "::error::Example coverage is ${total}; expected 100.0%"
+            exit 1
+          fi

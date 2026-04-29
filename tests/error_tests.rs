@@ -1,6 +1,8 @@
 // Copyright © 2024 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! Integration tests for `EngineError` and `TemplateError` variants.
+
 use staticweaver::EngineError;
 use staticweaver::TemplateError;
 
@@ -22,10 +24,15 @@ mod template_error_tests {
 
     /// Test the `Reqwest` variant of the `TemplateError` enum.
     /// This test checks if an HTTP request error is correctly wrapped inside a `TemplateError::Reqwest`.
+    #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest() {
+        // `.invalid` is reserved by RFC 2606 — DNS resolution is
+        // guaranteed to fail on every platform, so this never matches a
+        // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://localhost:1").unwrap_err();
+            reqwest::blocking::get("http://nonexistent.invalid./")
+                .unwrap_err();
         let template_error = TemplateError::Reqwest(reqwest_error);
         assert!(matches!(template_error, TemplateError::Reqwest(_)));
     }
@@ -69,10 +76,15 @@ mod template_error_tests {
 
     /// Test the `Display` implementation for the `TemplateError::Reqwest` variant.
     /// This test checks if the display output for a Reqwest error is formatted correctly.
+    #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest_display() {
+        // `.invalid` is reserved by RFC 2606 — DNS resolution is
+        // guaranteed to fail on every platform, so this never matches a
+        // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://localhost:1").unwrap_err();
+            reqwest::blocking::get("http://nonexistent.invalid./")
+                .unwrap_err();
         let template_error = TemplateError::Reqwest(reqwest_error);
         assert!(
             format!("{}", template_error).starts_with("Request error:")
@@ -97,10 +109,15 @@ mod additional_template_error_tests {
 
     /// Test chaining of Reqwest errors using the `#[from]` attribute.
     /// This ensures that Reqwest errors are correctly converted into `TemplateError::Reqwest`.
+    #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_reqwest_chaining() {
+        // `.invalid` is reserved by RFC 2606 — DNS resolution is
+        // guaranteed to fail on every platform, so this never matches a
+        // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://localhost:1").unwrap_err();
+            reqwest::blocking::get("http://nonexistent.invalid./")
+                .unwrap_err();
         let template_error = TemplateError::from(reqwest_error);
         assert!(matches!(template_error, TemplateError::Reqwest(_)));
     }
@@ -133,12 +150,17 @@ mod additional_template_error_tests {
 
     /// Test conversion consistency between different types of errors.
     /// This ensures that both I/O and Reqwest errors are correctly handled by `TemplateError`.
+    #[cfg(feature = "remote-templates")]
     #[test]
     fn test_template_error_conversion_consistency() {
         let io_error: io::Error =
             io::ErrorKind::PermissionDenied.into();
+        // `.invalid` is reserved by RFC 2606 — DNS resolution is
+        // guaranteed to fail on every platform, so this never matches a
+        // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://localhost:1").unwrap_err();
+            reqwest::blocking::get("http://nonexistent.invalid./")
+                .unwrap_err();
 
         let io_template_error = TemplateError::from(io_error);
         let reqwest_template_error = TemplateError::from(reqwest_error);

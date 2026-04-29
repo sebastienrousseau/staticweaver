@@ -1,12 +1,11 @@
-// Copyright © 2024 StaticWeaver. All rights reserved.
+#![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Copyright © 2024-2026 StaticWeaver. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-
-// src/lib.rs
-
 #![doc = include_str!("../README.md")]
 #![doc(
-    html_favicon_url = "https://kura.pro/staticweaver/images/favicon.ico",
-    html_logo_url = "https://kura.pro/staticweaver/images/logos/staticweaver.svg",
+    html_favicon_url = "https://cloudcdn.pro/staticweaver/v1/favicon.ico",
+    html_logo_url = "https://cloudcdn.pro/staticweaver/v1/logos/staticweaver.svg",
     html_root_url = "https://docs.rs/staticweaver"
 )]
 #![crate_name = "staticweaver"]
@@ -14,20 +13,26 @@
 #![deny(missing_docs)]
 #![warn(rustdoc::missing_crate_level_docs)]
 
-/// Contains the `Context` struct for managing template variables.
+/// Polymorphic key-value `Context` and the `Value` enum (`Null`,
+/// `Bool`, `Number`, `String`, `List`, `Map`) that templates substitute.
+/// Supports dot-notation lookup via [`context::Context::get_path`].
 pub mod context;
 
-/// Provides the `Engine` struct for template rendering.
+/// The [`engine::Engine`] struct: template parser, expression
+/// evaluator, partial loader, inheritance resolver, filter pipeline,
+/// and renderer for both in-memory strings and `.html` files on disk.
 pub mod engine;
 
-/// Defines error types for template processing.
+/// Error types ([`error::EngineError`] and [`error::TemplateError`])
+/// returned by every fallible operation in the crate.
 pub mod error;
 
-/// Implements caching mechanisms for improved performance.
+/// Generic time-bounded LRU cache with TTL expiration. Used by
+/// [`engine::Engine::render_page`] to memoise rendered pages.
 pub mod cache;
 
 pub use context::Context;
-pub use engine::{Engine, PageOptions};
+pub use engine::Engine;
 pub use error::{EngineError, TemplateError};
 
 /// Prelude module for convenient imports

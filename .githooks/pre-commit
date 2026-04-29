@@ -1,0 +1,48 @@
+#!/bin/sh
+# Repo-local pre-commit hook. Installed by `make init` via:
+#   git config core.hooksPath .githooks
+#
+# POSIX sh only — runs identically on macOS, Linux, and WSL2, plus
+# git-for-windows' bundled Git Bash.
+set -eu
+
+red()  { printf '\033[31m%s\033[0m' "$1"; }
+bold() { printf '\033[1m%s\033[0m'  "$1"; }
+
+fail=0
+
+# 1. Commits must be signed. Aligns with CLAUDE.md "Signing: git commit -S
+#    always" and matches the contract in CONTRIBUTING.md.
+if [ "$(git config --get commit.gpgsign 2>/dev/null || echo false)" != "true" ]; then
+    printf '%s commit.gpgsign must be true for this repo.\n' "$(red 'error:')" >&2
+    printf '  run: %s\n' "$(bold 'git config commit.gpgsign true')" >&2
+    fail=1
+fi
+
+# 2. Block commits that accidentally stage a secret-shaped filename.
+#    Doesn't scan content — just name patterns commonly associated with
+#    credentials.
+staged="$(git diff --cached --name-only --diff-filter=AM 2>/dev/null || true)"
+if [ -n "$staged" ]; then
+    secrets="$(printf '%s\n' "$staged" | grep -E \
+        '(^|/)\.env($|\..*$)|\.pem$|\.p12$|(^|/)id_(rsa|ed25519|ecdsa)$|credentials\.json$' \
+        || true)"
+    if [ -n "$secrets" ]; then
+        printf '%s secret-looking file(s) in commit; aborting.\n' "$(red 'error:')" >&2
+        printf '%s\n' "$secrets" | sed 's/^/  - /' >&2
+        fail=1
+    fi
+fi
+
+# 3. If `cargo fmt` is available, verify formatting. Skip silently if
+#    cargo isn't on PATH — hook must not block contributors who only
+#    edit docs or CI from outside a rust env.
+if command -v cargo >/dev/null 2>&1 && cargo fmt --version >/dev/null 2>&1; then
+    if ! cargo fmt --all -- --check >/dev/null 2>&1; then
+        printf '%s cargo fmt would modify staged files.\n' "$(red 'error:')" >&2
+        printf '  run: %s\n' "$(bold 'cargo fmt --all')" >&2
+        fail=1
+    fi
+fi
+
+exit "$fail"

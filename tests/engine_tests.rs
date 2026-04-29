@@ -7,7 +7,7 @@
 mod tests {
     use fnv::FnvHashMap;
     use staticweaver::engine::EngineError;
-    use staticweaver::{Context, Engine, PageOptions};
+    use staticweaver::{Context, Engine};
     use std::fs::File;
     use std::io::Write;
     use std::time::Duration;
@@ -93,8 +93,27 @@ mod tests {
         }
 
         #[test]
-        fn test_engine_render_special_characters_in_context() {
+        fn test_engine_render_special_characters_escaped_by_default() {
             let engine = create_engine();
+            let mut context = FnvHashMap::default();
+            let _ = context.insert(
+                "name".to_string(),
+                "<script>alert('XSS')</script>".to_string(),
+            );
+            let _ =
+                context.insert("greeting".to_string(), "&".to_string());
+            let template = "{{greeting}} {{name}}";
+            assert_template_rendering(
+                &engine,
+                template,
+                &context,
+                Ok("&amp; &lt;script&gt;alert(&#x27;XSS&#x27;)&lt;/script&gt;"),
+            );
+        }
+
+        #[test]
+        fn test_engine_render_special_characters_raw_when_disabled() {
+            let engine = create_engine().with_html_escape(false);
             let mut context = FnvHashMap::default();
             let _ = context.insert(
                 "name".to_string(),
@@ -149,7 +168,13 @@ mod tests {
             use super::*;
             use staticweaver::engine::EngineError::Io;
 
+            // Hits a live URL; only compiled when the remote-templates
+            // feature is on, and ignored by default so a flaky network or
+            // upstream rename does not red-line CI. Run explicitly with:
+            //     cargo test --features remote-templates -- --ignored
+            #[cfg(feature = "remote-templates")]
             #[test]
+            #[ignore = "requires network + github.com reachable"]
             fn test_engine_download_file() {
                 let engine = create_engine();
                 let url = "https://raw.githubusercontent.com/sebastienrousseau/shokunin/main/template";
@@ -223,59 +248,24 @@ mod tests {
             }
         }
 
-        /// Tests for the `PageOptions` struct.
-        mod page_options_tests {
-            use super::*;
-
-            #[test]
-            fn test_page_options_new() {
-                let options = PageOptions::new();
-                assert!(options.elements.is_empty());
-            }
-
-            #[test]
-            fn test_page_options_set_get() {
-                let mut options = PageOptions::new();
-                options
-                    .set("title".to_string(), "My Title".to_string());
-                assert_eq!(
-                    options.get("title"),
-                    Some(&"My Title".to_string())
-                );
-                assert_eq!(options.get("non_existent"), None);
-            }
-
-            #[test]
-            fn test_page_options_large_context() {
-                let mut options = PageOptions::new();
-                for i in 0..1000 {
-                    let key = format!("key{}", i);
-                    let value = format!("value{}", i);
-                    options.set(key, value);
-                }
-                assert_eq!(
-                    options.get("key999"),
-                    Some(&"value999".to_string())
-                );
-                assert_eq!(options.get("key1000"), None);
-            }
-        }
-
         /// Edge case tests for template rendering.
         mod context_edge_cases_tests {
             use super::*;
 
             #[test]
-            fn test_render_template_invalid_format() {
+            fn test_render_template_bare_braces_are_literal() {
+                // Single-brace delimiters without a matching `{{` are now
+                // treated as literal text; the previous rejection was a
+                // false-positive heuristic.
                 let engine = create_engine();
                 let context = create_basic_context();
                 let template = "{greeting}, {name}!";
                 assert_template_rendering(
-                &engine,
-                template,
-                &context,
-                Err(EngineError::InvalidTemplate("Invalid template format: single curly braces detected".to_string())),
-            );
+                    &engine,
+                    template,
+                    &context,
+                    Ok("{greeting}, {name}!"),
+                );
             }
 
             #[test]
@@ -341,7 +331,6 @@ mod tests {
                 let mut engine =
                     Engine::new("templates", Duration::from_secs(3600));
 
-                // Insert multiple entries to simulate cache size exceeding max limit
                 let _ = engine
                     .render_cache
                     .insert("key1".to_string(), "value1".to_string());
@@ -350,10 +339,13 @@ mod tests {
                     .insert("key2".to_string(), "value2".to_string());
                 assert_eq!(engine.render_cache.len(), 2);
 
-                // Set max cache size to 1
+                // LRU-bounded: capping at 1 preserves existing entries
+                // until the next insert evicts down to the cap.
                 engine.set_max_cache_size(1);
-                // Cache should be cleared as the limit is exceeded
-                assert!(engine.render_cache.is_empty());
+                let _ = engine
+                    .render_cache
+                    .insert("key3".to_string(), "value3".to_string());
+                assert_eq!(engine.render_cache.len(), 1);
             }
         }
     }

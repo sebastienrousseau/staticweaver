@@ -14,6 +14,15 @@ use thiserror::Error;
 /// This error type consolidates multiple underlying error types, including I/O errors,
 /// network request errors, and rendering-specific issues. It provides a unified interface for
 /// handling errors in the engine context.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::EngineError;
+///
+/// let err = EngineError::Render("missing key".to_string());
+/// assert_eq!(err.to_string(), "Render error: missing key");
+/// ```
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum EngineError {
@@ -21,7 +30,10 @@ pub enum EngineError {
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 
-    /// Network request error encountered during engine operations.
+    /// Network request error. Only available when the `remote-templates`
+    /// feature is enabled.
+    #[cfg(feature = "remote-templates")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "remote-templates")))]
     #[error("Request error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
@@ -50,6 +62,15 @@ pub enum EngineError {
 ///
 /// This error type focuses on issues related to the manipulation of templates,
 /// such as syntax errors, rendering failures, or invalid input data.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::TemplateError;
+///
+/// let err = TemplateError::MissingVariable("name".to_string());
+/// assert_eq!(err.to_string(), "Missing variable: name");
+/// ```
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum TemplateError {
@@ -57,7 +78,10 @@ pub enum TemplateError {
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 
-    /// Network request error encountered during template operations.
+    /// Network request error. Only available when the `remote-templates`
+    /// feature is enabled.
+    #[cfg(feature = "remote-templates")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "remote-templates")))]
     #[error("Request error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
@@ -68,10 +92,6 @@ pub enum TemplateError {
     /// Error during rendering, such as unresolved template tags or missing context.
     #[error("Rendering error: {0}")]
     RenderError(String),
-
-    /// Encountered an engine error during the template processing.
-    #[error("Engine error: {0}")]
-    EngineError(#[from] Box<EngineError>),
 
     /// Error when a required variable is missing from the context.
     #[error("Missing variable: {0}")]
@@ -86,6 +106,24 @@ pub enum TemplateError {
 ///
 /// This type is used throughout the StaticWeaver library for any operation that
 /// can produce an `EngineError`.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::error::Result;
+/// use staticweaver::EngineError;
+///
+/// fn check(input: &str) -> Result<usize> {
+///     if input.is_empty() {
+///         Err(EngineError::InvalidTemplate("empty".to_string()))
+///     } else {
+///         Ok(input.len())
+///     }
+/// }
+///
+/// assert_eq!(check("hello").unwrap(), 5);
+/// assert!(check("").is_err());
+/// ```
 pub type Result<T> = std::result::Result<T, EngineError>;
 
 #[cfg(test)]
@@ -248,17 +286,6 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Rendering error: Missing context variable"
-        );
-    }
-
-    #[test]
-    fn test_template_error_engine_error() {
-        let engine_err =
-            EngineError::Render("Render failure".to_string());
-        let err = TemplateError::EngineError(Box::new(engine_err));
-        assert_eq!(
-            err.to_string(),
-            "Engine error: Render error: Render failure"
         );
     }
 

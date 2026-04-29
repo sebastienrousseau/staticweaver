@@ -5,19 +5,21 @@
 [package]
 # General project metadata
 name = "staticweaver"                       # The name of the library
-version = "0.0.1"                           # Initial version of the crate
+version = "0.0.2"                           # Current version of the crate
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
-rust-version = "1.56.0"                     # Minimum supported Rust version
+rust-version = "1.68"                       # MSRV (floor driven by thiserror 2.0 + regex 1.11 + serde_json 1.0)
 license = "MIT OR Apache-2.0"               # Dual licensing strategy
 description = """
-A powerful and flexible static site generator and templating engine for Rust.
+Small, safe, fast templating engine for Rust. Mustache-compatible \
+syntax with Tera-style expressions, inheritance with super(), 23 \
+built-in filters, custom filters/tests, pluggable loaders, SIMD HTML \
+escape that matches Askama, line:col error messages, zero unsafe code.
 """                                         # Short library description
 homepage = "https://staticweaver.com/"             # Project's homepage URL
 documentation = "https://staticweaver.com/documentation/index.html" # Doc URL
 repository = "https://github.com/sebastienrousseau/staticweaver"    # Repository URL
 readme = "README.md"                        # Path to the readme file
-build = "build.rs"                          # Path to the build script
 
 # -----------------------------------------------------------------------------
 # Crate Configuration
@@ -43,6 +45,11 @@ exclude = [
     "/.vscode/*"                            # Ignore VSCode settings
 ]
 
+# Disable cargo's autodiscovery so `examples/support.rs` (a shared helper
+# module, not a binary) is not compiled as an example on its own. The
+# real examples are listed explicitly in the `[[example]]` tables below.
+autoexamples = false
+
 # -----------------------------------------------------------------------------
 # Library Information
 # -----------------------------------------------------------------------------
@@ -53,26 +60,58 @@ name = "staticweaver"                   # Internal name of the library
 path = "src/lib.rs"                     # Path to the library entry point
 
 # -----------------------------------------------------------------------------
+# Binary
+# -----------------------------------------------------------------------------
+[[bin]]
+# Lightweight CLI for rendering templates from the shell. Hand-rolled
+# arg parsing — no clap dep — so `cargo install staticweaver`
+# produces a small, dep-light binary alongside the library.
+name = "staticweaver"
+path = "src/bin/staticweaver.rs"
+
+# -----------------------------------------------------------------------------
 # Features
 # -----------------------------------------------------------------------------
 [features]
 # Optional features that can be enabled or disabled.
 default = []                                # No default features enabled
-async = []                                  # Placeholder for future asynchronous feature support
+remote-templates = ["dep:reqwest"]          # Fetch templates over HTTP/S via create_template_folder
 
-# -----------------------------------------------------------------------------
-# Build Dependencies
-# -----------------------------------------------------------------------------
-[build-dependencies]
-# Dependencies for the build script, used for pre-compilation tasks.
-version_check = "0.9"                       # Ensures that a compatible Rust version is used
+# Pulls in axum + tokio so `examples/axum.rs` compiles. Opt-in
+# because the underlying deps are heavy and not needed for the
+# library itself. Run with:
+#   cargo run --example axum --features axum-example
+axum-example = ["dep:axum", "dep:tokio"]
+
+# Enables the `{{ value | json }}` filter for serialising context
+# values as JSON. Pulls serde_json — kept opt-in so dep-light
+# default builds stay dep-light.
+json = ["dep:serde_json"]
 
 # -----------------------------------------------------------------------------
 # Development Dependencies
 # -----------------------------------------------------------------------------
 [dev-dependencies]
 # Dependencies required for testing and development.
-criterion = "0.5"                           # Benchmarking library to test performance
+criterion = "0.8"                           # Benchmarking library to test performance
+# mockito powers the remote-templates integration tests: it boots a real
+# HTTP server on a random localhost port so `reqwest::blocking` exercises
+# the actual wire path (status codes, Content-Type, body limits) without
+# depending on a live network.
+mockito = "1"
+
+# Comparative benchmarks. Pulled in only for `cargo bench --bench
+# comparative` so they don't bloat ordinary test builds. All three are
+# runtime / compile-time templating engines we measure ourselves against
+# to keep performance claims honest.
+tera = { version = "1", default-features = false }
+minijinja = "2"
+askama = "0.12"
+
+# proptest powers the random-template robustness suite in
+# tests/proptest_parser.rs — every parser code path must NEVER panic
+# on arbitrary input, only return a clean EngineError.
+proptest = "1"
 
 # -----------------------------------------------------------------------------
 # Dependencies
@@ -82,53 +121,98 @@ criterion = "0.5"                           # Benchmarking library to test perfo
 
 fnv = "1.0"                                 # Fast non-cryptographic hash function
 
-# regex is used for regular expression support in the template engine.
-regex = "1.11"
+# askama_escape is the same SIMD HTML-entity encoder Askama uses for
+# its built-in auto-escape, with a 5-character set (& < > " ') matching
+# our pre-existing contract. Auto-vectorised inner loop on long strings
+# (~3-10x faster than a scalar byte scan). Used only by
+# `escape_html_into`.
+askama_escape = "0.10"
 
-# reqwest is a popular HTTP client for Rust, used for handling remote template fetching.
-# The `blocking` feature allows synchronous HTTP requests.
-reqwest = { version = "0.12", features = ["json", "blocking"] }
+# reqwest powers the optional remote-template fetcher. Gated behind the
+# `remote-templates` feature so the core crate has no networking code in
+# its default build. rustls + native-roots avoids pulling OpenSSL.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "rustls-native-certs"], optional = true }
 
-# serde is used for serializing and deserializing data structures, including JSON.
-# The `derive` feature simplifies the process of creating serializable and deserializable structs.
-serde = { version = "1.0", features = ["derive"] }
+# axum + tokio: only used by examples/axum.rs, gated behind the
+# `axum-example` feature. Adds zero weight to the default library
+# build because they're optional dependencies.
+axum = { version = "0.7", optional = true }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"], optional = true }
 
-# serde_json is used for working with JSON data, which might be a common format for template context data.
-serde_json = "1.0"
+# serde_json: only used by the `json` filter, gated behind the
+# `json` feature. Default build has no JSON dep.
+serde_json = { version = "1", optional = true }
 
-# tempfile is used to create temporary files and directories, which may be needed for template generation.
+# tempfile is used to create temporary directories for the remote-template
+# fetcher. Still needed at runtime for the feature-gated download path.
 tempfile = "3.13"
 
-# thiserror is used for handling errors in a simple and clear way, especially for custom error types.
+# thiserror provides the derive macro for error types.
 thiserror = "2.0"
 
 # -----------------------------------------------------------------------------
 # Examples
 # -----------------------------------------------------------------------------
+# Each example uses `#[path = "support.rs"] mod support;` to pull in a
+# shared spinner/checkmark helper. The pattern, naming (one-word file
+# name) and structure match the style used across sebastienrousseau/*
+# crates (e.g. `noyalib/examples`).
 [[example]]
-# Example code demonstrating the cache functionality.
-name = "cache_example"                  # Name of the example
-path = "examples/cache_example.rs"      # Path to the example code
+name = "hello"
+path = "examples/hello.rs"
 
 [[example]]
-# Example code demonstrating the context functionality.
-name = "context_example"                # Name of the example
-path = "examples/context_example.rs"    # Path to the example code
+name = "context"
+path = "examples/context.rs"
 
 [[example]]
-# Example code demonstrating the engine functionality.
-name = "engine_example"                 # Name of the example
-path = "examples/engine_example.rs"     # Path to the example code
+name = "cache"
+path = "examples/cache.rs"
 
 [[example]]
-# Example code demonstrating the error handling functionality.
-name = "error_example"                  # Name of the example
-path = "examples/error_example.rs"      # Path to the example code
+name = "engine"
+path = "examples/engine.rs"
 
 [[example]]
-# Example code demonstrating the library functionality.
-name = "lib_example"                    # Name of the example
-path = "examples/lib_example.rs"        # Path to the example code
+name = "errors"
+path = "examples/errors.rs"
+
+[[example]]
+# Gated behind `remote-templates`; without the feature the example
+# prints a hint telling the user how to enable it.
+name = "remote"
+path = "examples/remote.rs"
+
+[[example]]
+# Drops staticweaver into a minimal Axum web server so the
+# integration recipe is testable end-to-end. Opt-in because axum +
+# tokio are heavy. Run with:
+#   cargo run --example axum --features axum-example
+name = "axum"
+path = "examples/axum.rs"
+required-features = ["axum-example"]
+
+[[example]]
+# {{#extends}} + {{#block}} + {{ super() }} showcase. Uses
+# MemoryLoader so the example is self-contained.
+name = "inheritance"
+path = "examples/inheritance.rs"
+
+[[example]]
+# Built-in + custom filter / test pipeline showcase.
+name = "filters"
+path = "examples/filters.rs"
+
+[[example]]
+# FsLoader / MemoryLoader / a custom hot-mutable loader
+# implementing TemplateLoader directly.
+name = "loaders"
+path = "examples/loaders.rs"
+
+[[example]]
+# Expression language + #each / range / break / continue / set.
+name = "control_flow"
+path = "examples/control_flow.rs"
 
 # -----------------------------------------------------------------------------
 # Criterion Benchmark
@@ -137,6 +221,14 @@ path = "examples/lib_example.rs"        # Path to the example code
 # Benchmarking configuration for performance testing.
 name = "template_benchmark"                   # Name of the benchmark
 harness = false                             # Disable the default benchmark harness (used by Criterion)
+
+[[bench]]
+# Comparative matrix vs Tera, Minijinja, and Askama. Uses the same
+# Criterion harness; produces one comparison group per workload so
+# `cargo bench --bench comparative` prints all four engines side by side.
+name = "comparative"
+path = "benches/comparative.rs"
+harness = false
 
 # -----------------------------------------------------------------------------
 # Documentation Configuration
@@ -166,7 +258,7 @@ elided_lifetimes_in_paths = "allow"         # Allow lifetimes to be elided in pa
 non_camel_case_types = "allow"              # Allow non-camel-case types
 non_upper_case_globals = "allow"            # Allow non-uppercase global variables
 trivial_bounds = "allow"                    # Allow trivial bounds in trait definitions
-unsafe_code = "allow"                       # Allow the usage of unsafe code blocks
+unsafe_code = "forbid"                      # Forbid unsafe code (crate uses #![forbid(unsafe_code)])
 
 ## Forbidden
 missing_debug_implementations = "forbid"    # Forbid missing `Debug` implementations
@@ -182,7 +274,6 @@ future_incompatible = { level = "deny", priority = -1 } # Handle future compatib
 keyword_idents = { level = "deny", priority = -1 }      # Deny usage of keywords as identifiers
 macro_use_extern_crate = "deny"             # Deny macro use of `extern crate`
 meta_variable_misuse = "deny"               # Deny misuse of meta variables in macros
-missing_fragment_specifier = "deny"         # Deny missing fragment specifiers in macros
 noop_method_call = "deny"                   # Deny method calls that have no effect
 rust_2018_idioms = { level = "deny", priority = -1 }    # Enforce Rust 2018 idioms
 rust_2021_compatibility = { level = "deny", priority = -1 } # Enforce Rust 2021 compatibility
@@ -198,36 +289,16 @@ unused_macro_rules = "deny"                 # Deny unused macros
 unused_qualifications = "deny"              # Deny unnecessary type qualifications
 variant_size_differences = "deny"           # Deny enum variants with significant size differences
 
-# -----------------------------------------------------------------------------
-# Clippy Configuration
-# -----------------------------------------------------------------------------
-[package.metadata.clippy]
-# Clippy lint configuration for enhanced code analysis.
-warn-lints = [
-    "clippy::all",                           # Enable all common Clippy lints
-    "clippy::pedantic",                      # Enable pedantic lints for stricter checking
-    "clippy::cargo",                         # Enable lints specific to cargo
-    "clippy::nursery",                       # Enable experimental lints from Clippy’s nursery
-    "clippy::complexity",                    # Warn on code complexity and suggest improvements
-    "clippy::correctness",                   # Ensure code correctness, flagging potential issues
-    "clippy::perf",                          # Lints that catch performance issues
-    "clippy::style",                         # Suggest stylistic improvements
-    "clippy::suspicious",                    # Detect suspicious code patterns
-    "clippy::module_name_repetitions",       # Avoid repeating module names in the crate name
-]
-
-# Customize Clippy to allow certain less critical lints.
-allow-lints = [
-    "clippy::module_inception",              # Allow modules with the same name as their parents
-    "clippy::too_many_arguments",            # Allow functions with more than 7 arguments if justified
-    "clippy::missing_docs_in_private_items", # Skip requiring documentation for private items
-]
-
-# Enforce specific warnings and errors more strictly.
-deny-lints = [
-    "clippy::unwrap_used",                   # Deny the use of unwrap to ensure error handling
-    "clippy::expect_used",                   # Deny the use of expect to avoid improper error handling
-]
+# Clippy `all` is already warn by default; we list it explicitly so future
+# contributors see where to add lints. Pedantic/nursery are intentionally
+# left off — they generate churn that belongs in a follow-up rather than
+# red-lining CI on every `-D warnings` build.
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+module_inception = "allow"
+module_name_repetitions = "allow"
+missing_docs_in_private_items = "allow"
+too_many_arguments = "allow"
 
 # -----------------------------------------------------------------------------
 # Profiles
