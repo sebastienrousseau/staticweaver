@@ -542,6 +542,14 @@ pub struct Engine {
     /// assert_eq!(engine.autoescape_extensions, vec![".html"]);
     /// ```
     pub autoescape_extensions: Vec<String>,
+    /// When `true`, an unresolved `{{key}}` substitution emits an
+    /// empty string instead of aborting the render with
+    /// `EngineError::Render("Unresolved template tag: <key>")`.
+    /// Defaults to `false` (strict). Mirrors Jinja2's "undefined"
+    /// mode and lets sites whose page templates reference variables
+    /// that not every page supplies build without per-page shims.
+    /// Toggle via [`Engine::with_lax_undefined`]. Issue #28.
+    pub lax_undefined: bool,
 }
 
 // `Engine` is mostly auto-debuggable, but `custom_filters` carries
@@ -566,6 +574,7 @@ impl std::fmt::Debug for Engine {
             // dyn-trait field — Debug just shows the placeholder.
             .field("loader", &"<dyn TemplateLoader>")
             .field("autoescape_extensions", &self.autoescape_extensions)
+            .field("lax_undefined", &self.lax_undefined)
             .finish()
     }
 }
@@ -600,6 +609,7 @@ impl Engine {
                 template_path,
             ))),
             autoescape_extensions: Vec::new(),
+            lax_undefined: false,
         }
     }
 
@@ -653,6 +663,7 @@ impl Engine {
             custom_tests: HashMap::new(),
             loader,
             autoescape_extensions: Vec::new(),
+            lax_undefined: false,
         }
     }
 
@@ -796,6 +807,32 @@ impl Engine {
     #[must_use]
     pub fn with_html_escape(mut self, enable: bool) -> Self {
         self.escape_html = enable;
+        self
+    }
+
+    /// Sets whether unresolved `{{key}}` substitutions abort the
+    /// render (strict, default) or emit an empty string (lax).
+    ///
+    /// Lax mode mirrors Jinja2's "undefined" behaviour and lets
+    /// sites whose page templates reference variables that not every
+    /// page supplies build without per-page shims. Issue #28.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::{Context, Engine};
+    /// use std::time::Duration;
+    /// let mut engine = Engine::new("", Duration::from_secs(60))
+    ///     .with_lax_undefined(true);
+    /// let ctx = Context::new();
+    /// assert_eq!(
+    ///     engine.render_template("hello {{name}}", &ctx).unwrap(),
+    ///     "hello ",
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_lax_undefined(mut self, lax: bool) -> Self {
+        self.lax_undefined = lax;
         self
     }
 
@@ -1623,12 +1660,22 @@ impl Engine {
                 .filter(|(name, _)| !name.is_empty())
                 .collect();
 
-            let value = active.get_path(lookup).ok_or_else(|| {
-                EngineError::Render(format!(
-                    "Unresolved template tag: {lookup}{}",
-                    pos_suffix(origin, lookup)
-                ))
-            })?;
+            let value = match active.get_path(lookup) {
+                Some(v) => v,
+                None => {
+                    if self.lax_undefined {
+                        // Issue #28: emit nothing for unresolved tags.
+                        // Skip the filter chain — applying e.g. `| date`
+                        // to an empty value would error anyway.
+                        rest = after_tag;
+                        continue;
+                    }
+                    return Err(EngineError::Render(format!(
+                        "Unresolved template tag: {lookup}{}",
+                        pos_suffix(origin, lookup)
+                    )));
+                }
+            };
             let mut rendered = value.to_string();
 
             // A trailing `safe` filter marks the value as already-safe
@@ -8005,5 +8052,32 @@ mod tests {
                 panic!("expected InvalidTemplate, got {other:?}")
             }
         }
+    }
+
+    #[test]
+    fn lax_mode_substitutes_empty_for_unresolved_tags() {
+        // Regression for sebastienrousseau/staticweaver#28.
+        // When lax_undefined is true, an undefined {{key}} emits "",
+        // letting the build proceed instead of aborting.
+        let engine = Engine::new("", Duration::from_secs(60))
+            .with_lax_undefined(true);
+        let ctx = Context::new();
+        let out = engine
+            .render_template("hello {{name}} world", &ctx)
+            .unwrap();
+        assert_eq!(out, "hello  world");
+    }
+
+    #[test]
+    fn strict_mode_still_errors_on_unresolved_tags() {
+        // Default is strict (lax_undefined = false). Pre-existing
+        // behaviour must not regress.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err = engine.render_template("{{name}}", &ctx).unwrap_err();
+        assert!(
+            format!("{err}").contains("Unresolved template tag"),
+            "strict mode should still raise; got: {err}"
+        );
     }
 }
