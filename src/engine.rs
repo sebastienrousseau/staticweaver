@@ -3497,15 +3497,92 @@ fn split_else<'a>(
 /// with SIMD (SSE4.2 / AVX2 / NEON depending on target) for a ~3-10×
 /// speedup on long strings vs the scalar byte scan we used previously.
 fn escape_html_into(s: &str, out: &mut String) {
-    use std::fmt::Write as _;
+    // ssg#589: skip already-formed entity references so a value that
+    // is already `AI &amp; Payments` doesn't become `AI &amp;amp;
+    // Payments` on a second pass through the engine.
+    //
+    // Trades the askama_escape SIMD path for a scalar char scan —
+    // entity-aware escaping needs lookahead the SIMD implementation
+    // doesn't provide. Performance cost is acceptable: the metadata
+    // / body content this scans is small per page and the pipeline
+    // is template-bound, not escape-bound.
     out.reserve(s.len());
-    // `write!` against `String` is infallible; the result is discarded
-    // explicitly to satisfy `unused_results`.
-    let _ = write!(
-        out,
-        "{}",
-        askama_escape::escape(s, askama_escape::Html)
-    );
+    let bytes = s.as_bytes();
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '&' => {
+                if let Some(end) = scan_existing_entity(bytes, i) {
+                    out.push_str(&s[i..end]);
+                    // Advance the char iterator past the entity.
+                    while let Some(&(j, _)) = chars.peek() {
+                        if j >= end {
+                            break;
+                        }
+                        let _ = chars.next();
+                    }
+                } else {
+                    out.push_str("&amp;");
+                }
+            }
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#x27;"),
+            other => out.push(other),
+        }
+    }
+}
+
+/// Returns `Some(end)` if `bytes[start..]` begins with a syntactically
+/// valid HTML entity reference (`&name;`, `&#NN;`, or `&#xNN;`),
+/// otherwise `None`. Caps the lookahead at 32 bytes — the longest
+/// HTML5 named character reference (`CounterClockwiseContourIntegral`)
+/// fits comfortably under that.
+fn scan_existing_entity(bytes: &[u8], start: usize) -> Option<usize> {
+    debug_assert_eq!(bytes[start], b'&');
+    let cap = bytes.len().min(start + 32);
+    let mut j = start + 1;
+    if j >= cap {
+        return None;
+    }
+    if bytes[j] == b'#' {
+        // Numeric: &#NN; or &#xNN; / &#XNN;.
+        j += 1;
+        if j >= cap {
+            return None;
+        }
+        let is_hex = bytes[j] == b'x' || bytes[j] == b'X';
+        if is_hex {
+            j += 1;
+        }
+        let digits_start = j;
+        while j < cap
+            && ((is_hex && bytes[j].is_ascii_hexdigit())
+                || (!is_hex && bytes[j].is_ascii_digit()))
+        {
+            j += 1;
+        }
+        if j == digits_start {
+            return None;
+        }
+        if j < cap && bytes[j] == b';' {
+            return Some(j + 1);
+        }
+        return None;
+    }
+    // Named: &name; where name is ASCII alphanumeric (a-z, A-Z, 0-9).
+    let name_start = j;
+    while j < cap && bytes[j].is_ascii_alphanumeric() {
+        j += 1;
+    }
+    if j == name_start {
+        return None;
+    }
+    if j < cap && bytes[j] == b';' {
+        return Some(j + 1);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -8079,5 +8156,51 @@ mod tests {
             format!("{err}").contains("Unresolved template tag"),
             "strict mode should still raise; got: {err}"
         );
+    }
+
+    #[test]
+    fn escape_html_preserves_existing_named_entities() {
+        // Regression for sebastienrousseau/static-site-generator#589.
+        // `AI &amp; Payments` must stay `AI &amp; Payments`, not
+        // become `AI &amp;amp; Payments`.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "AI &amp; Payments".to_string());
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "AI &amp; Payments");
+    }
+
+    #[test]
+    fn escape_html_preserves_existing_numeric_entities() {
+        // Numeric entity refs (decimal AND hex) must be preserved.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "copy &#169; hex &#xA9;".to_string());
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "copy &#169; hex &#xA9;");
+    }
+
+    #[test]
+    fn escape_html_still_escapes_bare_ampersand_at_eof() {
+        // A bare `&` with no terminator must still escape — the
+        // entity scanner is allowed to bail and fall through.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "AT&T R&D".to_string());
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "AT&amp;T R&amp;D");
+    }
+
+    #[test]
+    fn escape_html_handles_mixed_bare_and_escaped() {
+        // Mix: bare `&` → `&amp;`, already-escaped `&amp;` stays.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set(
+            "x".to_string(),
+            "AT&T owns &amp; and AT&amp;T too".to_string(),
+        );
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "AT&amp;T owns &amp; and AT&amp;T too");
     }
 }
