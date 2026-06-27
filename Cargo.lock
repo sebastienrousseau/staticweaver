@@ -69,12 +69,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "askama_escape"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "619743e34b5ba4e9703bba34deac3427c72507c7159f5fd030aea8cac0cfe341"
-
-[[package]]
 name = "askama_macros"
 version = "0.15.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1922,7 +1916,6 @@ name = "staticweaver"
 version = "0.0.2"
 dependencies = [
  "askama",
- "askama_escape",
  "axum",
  "criterion",
  "fnv",

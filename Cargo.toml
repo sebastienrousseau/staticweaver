@@ -13,8 +13,8 @@ license = "MIT OR Apache-2.0"               # Dual licensing strategy
 description = """
 Small, safe, fast templating engine for Rust. Mustache-compatible \
 syntax with Tera-style expressions, inheritance with super(), 23 \
-built-in filters, custom filters/tests, pluggable loaders, SIMD HTML \
-escape that matches Askama, line:col error messages, zero unsafe code.
+built-in filters, custom filters/tests, pluggable loaders, idempotent \
+HTML escape, line:col error messages, zero unsafe code.
 """                                         # Short library description
 homepage = "https://staticweaver.com/"             # Project's homepage URL
 documentation = "https://staticweaver.com/documentation/index.html" # Doc URL
@@ -120,13 +120,6 @@ proptest = "1"
 # Required dependencies for building and running the project.
 
 fnv = "1.0"                                 # Fast non-cryptographic hash function
-
-# askama_escape is the same SIMD HTML-entity encoder Askama uses for
-# its built-in auto-escape, with a 5-character set (& < > " ') matching
-# our pre-existing contract. Auto-vectorised inner loop on long strings
-# (~3-10x faster than a scalar byte scan). Used only by
-# `escape_html_into`.
-askama_escape = "0.10"
 
 # reqwest powers the optional remote-template fetcher. Gated behind the
 # `remote-templates` feature so the core crate has no networking code in

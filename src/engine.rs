@@ -3490,12 +3490,11 @@ fn split_else<'a>(
 /// named/numeric entities. Single-quote uses the numeric `&#x27;` form so
 /// the output stays valid inside both HTML and XML attributes.
 ///
-/// Byte-level scan: iterate over `s.as_bytes()`, flush clean runs via
-/// Append `s` to `out` with `& < > " '` substituted for their HTML
-/// entities. Same five-character set as Askama's `Html` escaper.
-/// Delegates to `askama_escape`, which auto-vectorises the inner loop
-/// with SIMD (SSE4.2 / AVX2 / NEON depending on target) for a ~3-10×
-/// speedup on long strings vs the scalar byte scan we used previously.
+/// Idempotent (ssg#589): already-formed entity references — `&name;`,
+/// `&#NN;`, `&#xNN;` — are preserved verbatim instead of getting their
+/// leading `&` re-escaped to `&amp;`. The lookup uses `scan_existing_entity`
+/// with a 32-byte cap (the longest HTML5 named ref,
+/// `CounterClockwiseContourIntegral`, is 31 chars).
 fn escape_html_into(s: &str, out: &mut String) {
     // ssg#589: skip already-formed entity references so a value that
     // is already `AI &amp; Payments` doesn't become `AI &amp;amp;
