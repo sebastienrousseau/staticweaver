@@ -171,7 +171,7 @@ Hidden
     fs::create_dir_all(&layout_dir)?;
     let template_path = layout_dir.join("post.html");
     fs::write(&template_path, "<h1>{{title}}</h1>")?;
-    let mut page_engine = Engine::new(
+    let page_engine = Engine::new(
         temp_dir.path().to_str().unwrap(),
         Duration::from_secs(60),
     );
@@ -228,7 +228,7 @@ Hidden
     });
 
     // ── Cache management ────────────────────────────────────────────
-    let mut cached_engine = Engine::new(
+    let cached_engine = Engine::new(
         temp_dir.path().to_str().unwrap(),
         Duration::from_secs(60),
     );
@@ -240,7 +240,7 @@ Hidden
             let _ = cached_engine.render_page(&page_ctx, "blog/post");
             vec![format!(
                 "render_cache.len = {}",
-                cached_engine.render_cache.len()
+                cached_engine.render_cache.lock().unwrap().len()
             )]
         },
     );
@@ -250,7 +250,7 @@ Hidden
             cached_engine.clear_cache();
             vec![format!(
                 "render_cache.len = {}",
-                cached_engine.render_cache.len()
+                cached_engine.render_cache.lock().unwrap().len()
             )]
         },
     );

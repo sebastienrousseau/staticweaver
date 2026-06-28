@@ -151,7 +151,7 @@ fn snapshot_inheritance_with_super() {
          {{#block \"t\"}}({{ super() }}) overridden{{/block}}"
             .to_string(),
     );
-    let mut e = Engine::with_loader(
+    let e = Engine::with_loader(
         Arc::new(MemoryLoader::new(store)),
         Duration::from_secs(60),
     );

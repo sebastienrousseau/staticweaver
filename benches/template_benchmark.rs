@@ -180,7 +180,7 @@ fn benchmark_render_inheritance(c: &mut Criterion) {
          {{/block}}"
             .to_string(),
     );
-    let mut engine = Engine::with_loader(
+    let engine = Engine::with_loader(
         Arc::new(MemoryLoader::new(store)),
         Duration::from_secs(60),
     );
@@ -217,7 +217,7 @@ fn benchmark_render_partial_in_each(c: &mut Criterion) {
         "row".to_string(),
         "<tr><td>{{this}}</td></tr>".to_string(),
     );
-    let mut engine = Engine::with_loader(
+    let engine = Engine::with_loader(
         Arc::new(MemoryLoader::new(store)),
         Duration::from_secs(60),
     );
@@ -320,7 +320,7 @@ fn benchmark_render_page_cache_hit_vs_miss(c: &mut Criterion) {
         tmpl.push_str(&format!("[{{{{k{i}}}}}]"));
     }
     let _ = store.insert("page".to_string(), tmpl);
-    let mut engine = Engine::with_loader(
+    let engine = Engine::with_loader(
         Arc::new(MemoryLoader::new(store)),
         Duration::from_secs(60),
     );
@@ -446,7 +446,7 @@ fn benchmark_loader_memory_vs_fs(c: &mut Criterion) {
     // MemoryLoader engine.
     let mut store = HashMap::new();
     let _ = store.insert("page".to_string(), body.to_string());
-    let mut mem_engine = Engine::with_loader(
+    let mem_engine = Engine::with_loader(
         Arc::new(MemoryLoader::new(store)),
         Duration::from_secs(60),
     );
@@ -465,7 +465,7 @@ fn benchmark_loader_memory_vs_fs(c: &mut Criterion) {
     // FsLoader engine. Use tempfile so the bench is hermetic.
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(dir.path().join("page.html"), body).unwrap();
-    let mut fs_engine = Engine::new(
+    let fs_engine = Engine::new(
         dir.path().to_str().unwrap(),
         Duration::from_secs(60),
     );

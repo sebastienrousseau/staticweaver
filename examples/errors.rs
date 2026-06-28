@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Io: missing template file ───────────────────────────────────
     let temp_dir = TempDir::new()?;
-    let mut engine = Engine::new(
+    let engine = Engine::new(
         temp_dir.path().to_str().unwrap(),
         Duration::from_secs(60),
     );

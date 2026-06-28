@@ -74,6 +74,18 @@ Out of scope:
   TLS backend (no OpenSSL pull-in).
 - `cargo deny check` passes on every CI run (advisories, bans, licenses,
   sources). Yanked crates are denied.
+- `cargo audit` (CVSS gate via reusable pipelines) + `osv-scanner`
+  (GHSA + RUSTSEC + crates.io) + `cargo vet` (human-review audits
+  imported from Mozilla / Google / bytecode-alliance / Embark) run on
+  every CI build. The three together cover the source of every
+  supply-chain disclosure surface that applies to a Rust crate.
+- **Formal verification** (Kani, weekly): `escape_html_into` is proven
+  idempotent (`escape(escape(x)) == escape(x)`) and proven to never
+  emit a bare `<` or `>` over the symbolic horizon Kani can solve
+  (currently `[u8; 4]`). The proofs live inside `src/engine.rs` gated
+  by `#[cfg(kani)]`; run with `cargo kani`.
+- **`missing_docs = "deny"`** — 100 % rustdoc coverage is a
+  `cargo build` failure, not just a CI check.
 - All release commits are GPG-signed; `Assisted-by:` trailers track AI
   tooling provenance per the Linux kernel coding-assistants convention.
 

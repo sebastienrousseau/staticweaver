@@ -1,0 +1,69 @@
+# Nightly coverage-guided fuzzing (issue #41). Three targets cover the
+# parser, the HTML escape path, and dot-notation path resolution. Each
+# runs for 5 minutes per night; failures upload artifacts but don't
+# block other targets (continue-on-error).
+#
+# Run locally with:
+#   cargo +nightly fuzz run parse
+#   cargo +nightly fuzz run escape -- -max_total_time=60
+#   cargo +nightly fuzz run dot_path
+
+name: Fuzz
+
+on:
+  schedule:
+    # 03:00 UTC daily — outside business hours for both EU and US.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: "Per-target fuzz duration in seconds"
+        default: "300"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse, escape, dot_path]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+
+      - name: Run fuzz target ${{ matrix.target }}
+        env:
+          DURATION: ${{ inputs.duration_seconds || '300' }}
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run ${{ matrix.target }} \
+            -- -max_total_time=${DURATION}
+
+      - name: Upload crash artifacts (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore

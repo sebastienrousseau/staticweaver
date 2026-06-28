@@ -126,6 +126,21 @@ and `#set` in-template assignment.
 cargo run --example control_flow
 ```
 
+### [async_tokio](async_tokio.rs) (Requires `async-tokio` feature, **v0.0.4**)
+Async render via Tokio. Demonstrates:
+
+- `MemoryAsyncLoader` for in-memory async templates.
+- `Engine::render_template_async` and `render_page_async` — async
+  load + sync render; cache shared with the sync path.
+- `Engine::render_to_async` streaming into an `AsyncWrite` sink
+  (`Vec<u8>`, `tokio::fs::File`, Axum body channel).
+- Sharing one `Arc<Engine>` across multiple tokio tasks
+  (`Engine: Send + Sync + Clone` as of v0.0.4).
+
+```bash
+cargo run --example async_tokio --features async-tokio
+```
+
 ---
 
 ## Example Support

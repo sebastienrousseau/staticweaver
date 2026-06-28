@@ -31,6 +31,14 @@ pub mod error;
 /// [`engine::Engine::render_page`] to memoise rendered pages.
 pub mod cache;
 
+/// Async template-loading surface (issue #37). Gated behind the
+/// `async` feature so default builds stay sync-only. Exposes the
+/// [`loader_async::AsyncTemplateLoader`] trait and a reference
+/// [`loader_async::TokioFsLoader`] impl (under `async-tokio`).
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+pub mod loader_async;
+
 pub use context::Context;
 pub use engine::Engine;
 pub use error::{EngineError, TemplateError};

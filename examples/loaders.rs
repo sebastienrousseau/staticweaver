@@ -56,7 +56,7 @@ fn main() {
     .unwrap();
 
     support::task_with_output("FsLoader (read from disk)", || {
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(FsLoader::new(temp.path().to_path_buf())),
             Duration::from_secs(60),
         );
@@ -74,7 +74,7 @@ fn main() {
                 "page".to_string(),
                 "Hello, {{ name }}! (MemoryLoader)".to_string(),
             );
-            let mut engine = Engine::with_loader(
+            let engine = Engine::with_loader(
                 Arc::new(MemoryLoader::new(store)),
                 Duration::from_secs(60),
             );
@@ -96,7 +96,7 @@ fn main() {
                 "live update {{ count }}".to_string(),
             );
 
-            let mut engine = Engine::with_loader(
+            let engine = Engine::with_loader(
                 live.clone(),
                 Duration::from_secs(60),
             );

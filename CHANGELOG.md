@@ -10,6 +10,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (pre-`1.0.0`, breaking changes may occur in minor/patch releases and are
 called out explicitly below).
 
+## [Unreleased]
+
+## [0.0.4] - 2026-06-28
+
+### Breaking
+- `Engine::render_page`, `render_page_to`, `set_max_cache_size`,
+  `clear_cache` now take `&self` (was `&mut self`). Issue #36. Enables
+  sharing one `Arc<Engine>` across threads / async tasks without the
+  `Arc<Mutex<Engine>>` envelope. Direct callers of `engine.render_cache`
+  must now go through `engine.render_cache.lock().unwrap()` because the
+  field is wrapped in `std::sync::Mutex` to provide the interior
+  mutability the cache needs.
+- **MSRV** raised 1.68 → 1.75 to enable async fn in traits (AFIT) used
+  by the optional `async` feature. The sync surface would still build on
+  1.68, but the documented floor is 1.75 to keep the contract honest.
+
+### Added
+- **Concurrency**: `Engine: Send + Sync + Clone`. New `tests/concurrent_render.rs`
+  with 6 compile-time + runtime soak tests proving 8 threads × 10 000
+  renders share one `Arc<Engine>` without data races (#36).
+- **Async**: new `async` and `async-tokio` features. `AsyncTemplateLoader`
+  trait, `TokioFsLoader` + `MemoryAsyncLoader` impls, `Engine::render_template_async`
+  / `render_page_async` / `render_to_async` / `render_page_to_async`
+  methods. Reuses the same `Mutex<Cache<…>>` as the sync path (#37, #38).
+- **Observability**: new optional `tracing` feature. `Engine::render_template`
+  and `render_page` emit `tracing::instrument` spans
+  (`staticweaver.render_template`, `staticweaver.render_page`) with
+  template-length / layout / context.len fields (#39).
+- **Cache metrics**: new `CacheStats` struct (Copy + Default + Eq) +
+  `Cache::stats()` method exposing `inserts`, `hits`, `misses`,
+  `evictions`, `ttl_expired` counters. Designed for cheap export to
+  prometheus/metrics/opentelemetry. 7 new unit tests (#40).
+- **Fuzzing**: new standalone `fuzz/` crate with three libfuzzer
+  targets (`parse`, `escape`, `dot_path`) + `.github/workflows/fuzz.yml`
+  nightly job (#41).
+- **Miri CI job**: nightly `cargo miri test --lib` (`continue-on-error`
+  for v0.0.4, hard gate planned for v0.0.5) (#42).
+- **Kani formal verification**: `#[cfg(kani)]` module in `src/engine.rs`
+  with two proofs against `escape_html_into` (idempotency + no bare
+  metachars). Weekly `.github/workflows/kani.yml` (#43).
+- **Supply chain**:
+  - SBOM + Sigstore on release — `release.yml` now generates CycloneDX
+    + SPDX JSON, signs the `.crate` artifact via cosign keyless OIDC,
+    attaches everything to the GitHub Release (#44).
+  - `cargo-vet init`: `supply-chain/config.toml` with imports for
+    Mozilla, Google, bytecode-alliance, Embark. CI gate (#45).
+  - OSV-Scanner CI job (GHSA + RUSTSEC + crates.io coverage) (#46).
+- **Version-drift CI gate**: `scripts/check-version-consistency.sh`
+  enforces that every `staticweaver = "x.y.z"` snippet in `README.md`
+  matches `Cargo.toml`. Added after the v0.0.3 release shipped with
+  README install snippets stuck at `0.0.2`.
+
+### Changed
+- `[lints.rust] missing_docs = "deny"` (was `warn`) — 100% rustdoc
+  coverage is now a `cargo build` failure, not just a CI check.
+
 ## [0.0.3] - 2026-06-27
 
 ### Fixed

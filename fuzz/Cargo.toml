@@ -1,0 +1,48 @@
+# Fuzz crate for staticweaver (issue #41). Standalone — not part of the
+# workspace, so adding fuzz targets here doesn't slow down ordinary
+# `cargo test` / `cargo build`. Run with:
+#
+#   cargo +nightly fuzz run parse
+#   cargo +nightly fuzz run escape
+#   cargo +nightly fuzz run dot_path
+#
+# Nightly is required by libfuzzer-sys.
+
+[package]
+name = "staticweaver-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+staticweaver = { path = "..", default-features = false }
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "escape"
+path = "fuzz_targets/escape.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dot_path"
+path = "fuzz_targets/dot_path.rs"
+test = false
+doc = false
+bench = false
+
+# Empty workspace — exclude the parent workspace so this fuzz crate is
+# built standalone (cargo-fuzz requires this).
+[workspace]
+members = []

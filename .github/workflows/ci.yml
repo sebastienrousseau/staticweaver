@@ -51,6 +51,76 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+  # Miri — undefined-behaviour interpreter (issue #42). Even with
+  # `#![forbid(unsafe_code)]` at the crate root, Miri catches UB
+  # introduced by derive-macro output (thiserror) and transitive deps
+  # (fnv, tempfile). Allowed-to-fail for v0.0.4; hard gate from v0.0.5.
+  miri:
+    name: Miri (nightly, --lib)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust nightly + Miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: cargo miri setup
+        run: cargo +nightly miri setup
+      - name: cargo miri test --lib
+        env:
+          # Skip Miri's strict isolation so filesystem-touching unit
+          # tests (FsLoader smoke tests) can read template fixtures.
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+        run: cargo +nightly miri test --lib --no-fail-fast
+
+  # OSV-Scanner — covers GHSA + RUSTSEC + crates.io advisories
+  # (issue #46). Complements the existing `Rust CI / Audit` (cargo-audit
+  # only sees RUSTSEC). Fails on CVSS >= 7.0.
+  osv-scanner:
+    name: OSV-Scanner
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v2.0.2
+        with:
+          scan-args: |-
+            --lockfile=./Cargo.lock
+            --format=table
+
+  # cargo-vet — supply-chain audit (issue #45). Covers the human-review
+  # side of supply chain (cargo-audit + osv-scanner cover the CVE side).
+  # Imports trusted audits from Mozilla, Google, bytecode-alliance,
+  # Embark. Remaining unaudited deps are exempted in
+  # supply-chain/config.toml. Adding a new dep that isn't covered by an
+  # import nor exempted fails this gate.
+  cargo-vet:
+    name: cargo-vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-vet
+        run: cargo install --locked cargo-vet
+      - name: cargo vet check (soft gate for v0.0.4)
+        # The remote audit imports (Mozilla hg, etc.) flake
+        # intermittently — `cargo vet check` exits non-zero on any
+        # unreachable import. Soft-gated for v0.0.4 (always exits 0,
+        # warning surfaced in the Actions log); promotion to hard gate
+        # is scheduled for v0.0.5 alongside a `cargo vet prune` pass
+        # that drops the least-reliable imports.
+        run: |
+          if ! cargo vet check; then
+            echo "::warning::cargo vet check failed (soft-gated for v0.0.4 — see ci.yml comment)"
+          fi
+
   # Line-coverage floor. The reusable `rust-ci.yml` already reports to
   # Codecov; this job additionally enforces a hard gate inside the repo
   # so a coverage regression fails the PR directly, without waiting on
@@ -76,6 +146,16 @@ jobs:
           echo "line coverage: ${cov}%"
           awk -v c="$cov" 'BEGIN {exit !(c+0 >= 98.0)}' \
             || { echo "::error::line coverage ${cov}% below 98% floor"; exit 1; }
+
+  # README ↔ Cargo.toml version consistency gate. Added in v0.0.4 after
+  # the v0.0.3 release shipped with README install snippets stuck at
+  # "0.0.2". Fast (~1s) so it can run on every push.
+  version-consistency:
+    name: README ↔ Cargo.toml version match
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/check-version-consistency.sh
 
   # Documentation build + coverage gate. Docs are published by docs.rs on
   # release; this job only smoke-tests that the crate documents cleanly

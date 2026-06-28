@@ -71,7 +71,7 @@ fn main() {
                 "truthy? = {}",
                 typed
                     .get_value("active")
-                    .map_or(false, |v| v.is_truthy())
+                    .is_some_and(|v| v.is_truthy())
             ),
         ]
     });

@@ -39,6 +39,48 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
+/// Snapshot of cache counters at a point in time. Returned by
+/// [`Cache::stats`].
+///
+/// All fields are monotonically increasing `u64`s — they grow as the cache
+/// is used and never decrement. Take two snapshots and subtract to get a
+/// rate / per-window count. Designed for cheap export to `prometheus`,
+/// `metrics`, or `opentelemetry` without forcing a dep choice on the
+/// caller. Issue #40.
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver::cache::Cache;
+/// use std::time::Duration;
+///
+/// let mut cache: Cache<String, u32> = Cache::new(Duration::from_secs(60));
+/// let _ = cache.insert("a".to_string(), 1);
+/// let _ = cache.get(&"a".to_string());   // hit
+/// let _ = cache.get(&"b".to_string());   // miss
+///
+/// let stats = cache.stats();
+/// assert_eq!(stats.inserts, 1);
+/// assert_eq!(stats.hits, 1);
+/// assert_eq!(stats.misses, 1);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    /// Number of `insert` calls (new entries + updates).
+    pub inserts: u64,
+    /// Number of `get` calls that returned `Some` for a live entry.
+    pub hits: u64,
+    /// Number of `get` calls that returned `None` (absent key, no hit).
+    pub misses: u64,
+    /// Number of entries removed because they hit the capacity ceiling
+    /// (LRU evictions). Does **not** count TTL expirations — see
+    /// `ttl_expired` for those.
+    pub evictions: u64,
+    /// Number of entries reaped by `get` finding them expired or by
+    /// `remove_expired` sweeping them.
+    pub ttl_expired: u64,
+}
+
 /// Represents a cached item with its value, expiration time, and the
 /// monotonic counter value at the entry's most recent access (used for
 /// LRU eviction when a capacity bound is hit).
@@ -74,6 +116,9 @@ pub struct Cache<K, V> {
     /// counter's value at that moment, producing a total ordering on
     /// usage recency without allocating a secondary index.
     access_counter: u64,
+    /// Cumulative hit / miss / eviction / ttl-expiry counters. Exposed
+    /// via [`Cache::stats`]. Issue #40.
+    stats: CacheStats,
 }
 
 impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
@@ -103,6 +148,7 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
             ttl,
             capacity: None,
             access_counter: 0,
+            stats: CacheStats::default(),
         }
     }
 
@@ -164,7 +210,32 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
             ttl,
             capacity: Some(capacity),
             access_counter: 0,
+            stats: CacheStats::default(),
         }
+    }
+
+    /// Returns a snapshot of cumulative cache counters (hits, misses,
+    /// evictions, ttl-expirations, inserts). Issue #40.
+    ///
+    /// All counters are monotonically increasing `u64`s. Take two
+    /// snapshots and subtract to get a per-window rate. Designed for
+    /// cheap export to `prometheus`, `metrics`, or `opentelemetry`
+    /// without forcing a dependency choice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::cache::Cache;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache: Cache<String, u32> = Cache::new(Duration::from_secs(60));
+    /// assert_eq!(cache.stats().inserts, 0);
+    /// let _ = cache.insert("k".to_string(), 1);
+    /// assert_eq!(cache.stats().inserts, 1);
+    /// ```
+    #[must_use]
+    pub fn stats(&self) -> CacheStats {
+        self.stats
     }
 
     /// Inserts a key-value pair into the cache.
@@ -209,6 +280,8 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
                 match victim {
                     Some(k) => {
                         let _ = self.items.remove(&k);
+                        self.stats.evictions =
+                            self.stats.evictions.wrapping_add(1);
                     }
                     None => break,
                 }
@@ -216,6 +289,7 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
         }
         self.access_counter = self.access_counter.wrapping_add(1);
         let expiration = Instant::now() + self.ttl;
+        self.stats.inserts = self.stats.inserts.wrapping_add(1);
         self.items
             .insert(
                 key,
@@ -256,12 +330,22 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
         // and `remove_expired` will collect them on the next pass.
         let now = Instant::now();
         let next = self.access_counter.wrapping_add(1);
-        let item = self.items.get_mut(key)?;
+        let item = match self.items.get_mut(key) {
+            Some(item) => item,
+            None => {
+                self.stats.misses = self.stats.misses.wrapping_add(1);
+                return None;
+            }
+        };
         if item.expiration > now {
             item.last_access = next;
             self.access_counter = next;
+            self.stats.hits = self.stats.hits.wrapping_add(1);
             Some(&item.value)
         } else {
+            self.stats.ttl_expired =
+                self.stats.ttl_expired.wrapping_add(1);
+            self.stats.misses = self.stats.misses.wrapping_add(1);
             None
         }
     }
@@ -286,7 +370,11 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
     /// ```
     pub fn remove_expired(&mut self) {
         let now = Instant::now();
+        let before = self.items.len() as u64;
         self.items.retain(|_, item| item.expiration > now);
+        let reaped = before.saturating_sub(self.items.len() as u64);
+        self.stats.ttl_expired =
+            self.stats.ttl_expired.wrapping_add(reaped);
     }
 
     /// Checks if a key exists in the cache and hasn't expired.
@@ -314,7 +402,7 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
     pub fn contains_key(&self, key: &K) -> bool {
         self.items
             .get(key)
-            .map_or(false, |item| item.expiration > Instant::now())
+            .is_some_and(|item| item.expiration > Instant::now())
     }
 
     /// Gets the remaining time-to-live for an item.
@@ -860,5 +948,96 @@ mod tests {
             items.is_empty(),
             "expired entries must not be yielded via IntoIterator"
         );
+    }
+
+    // ── #40: CacheStats observability ───────────────────────────────
+
+    #[test]
+    fn stats_default_is_all_zeros() {
+        let cache: Cache<String, u32> =
+            Cache::new(Duration::from_secs(60));
+        let s = cache.stats();
+        assert_eq!(s.inserts, 0);
+        assert_eq!(s.hits, 0);
+        assert_eq!(s.misses, 0);
+        assert_eq!(s.evictions, 0);
+        assert_eq!(s.ttl_expired, 0);
+    }
+
+    #[test]
+    fn stats_inserts_count_includes_updates() {
+        let mut cache: Cache<String, u32> =
+            Cache::new(Duration::from_secs(60));
+        let _ = cache.insert("k".to_string(), 1);
+        let _ = cache.insert("k".to_string(), 2); // overwrite, still counts
+        assert_eq!(cache.stats().inserts, 2);
+    }
+
+    #[test]
+    fn stats_hit_and_miss_paths() {
+        let mut cache: Cache<String, u32> =
+            Cache::new(Duration::from_secs(60));
+        let _ = cache.insert("a".to_string(), 1);
+        let _ = cache.get(&"a".to_string()); // hit
+        let _ = cache.get(&"a".to_string()); // hit
+        let _ = cache.get(&"missing".to_string()); // miss
+        let s = cache.stats();
+        assert_eq!(s.hits, 2);
+        assert_eq!(s.misses, 1);
+    }
+
+    #[test]
+    fn stats_ttl_expired_path_through_get() {
+        let mut cache: Cache<String, u32> =
+            Cache::new(Duration::from_millis(20));
+        let _ = cache.insert("k".to_string(), 1);
+        sleep(Duration::from_millis(40));
+        // get on an expired entry counts as both miss and ttl_expired.
+        let _ = cache.get(&"k".to_string());
+        let s = cache.stats();
+        assert_eq!(s.ttl_expired, 1);
+        assert_eq!(s.misses, 1);
+        assert_eq!(s.hits, 0);
+    }
+
+    #[test]
+    fn stats_remove_expired_increments_ttl_counter() {
+        let mut cache: Cache<String, u32> =
+            Cache::new(Duration::from_millis(20));
+        let _ = cache.insert("a".to_string(), 1);
+        let _ = cache.insert("b".to_string(), 2);
+        sleep(Duration::from_millis(40));
+        cache.remove_expired();
+        // Both entries reaped.
+        assert_eq!(cache.stats().ttl_expired, 2);
+    }
+
+    #[test]
+    fn stats_lru_eviction_counter_increments() {
+        let mut cache: Cache<String, u32> =
+            Cache::with_capacity(Duration::from_secs(60), 2);
+        let _ = cache.insert("a".to_string(), 1);
+        let _ = cache.insert("b".to_string(), 2);
+        let _ = cache.insert("c".to_string(), 3); // evicts oldest (a)
+        let _ = cache.insert("d".to_string(), 4); // evicts oldest (b)
+        let s = cache.stats();
+        assert_eq!(s.inserts, 4);
+        assert_eq!(s.evictions, 2);
+    }
+
+    #[test]
+    fn stats_struct_is_copy_and_default_and_eq() {
+        // Compile-time checks via trait bounds.
+        fn assert_copy_default_eq<T: Copy + Default + PartialEq>() {}
+        assert_copy_default_eq::<CacheStats>();
+        // Functional check: snapshots are independent of the cache.
+        let mut cache: Cache<&str, u32> =
+            Cache::new(Duration::from_secs(60));
+        let s1 = cache.stats();
+        let _ = cache.insert("k", 1);
+        let s2 = cache.stats();
+        assert_ne!(s1, s2); // mutating the cache doesn't mutate the snapshot
+        assert_eq!(s1.inserts, 0);
+        assert_eq!(s2.inserts, 1);
     }
 }

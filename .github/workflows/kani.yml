@@ -1,0 +1,44 @@
+# Weekly Kani formal-verification run (issue #43). Kani is a bounded
+# model checker for Rust; we use it to prove that the HTML escape
+# function is idempotent (`escape(escape(x)) == escape(x)`) and never
+# emits a bare `<` or `>`. The proofs live inside src/engine.rs gated
+# by `#[cfg(kani)]` so they're invisible to ordinary builds.
+#
+# Run locally with:
+#   cargo install --locked kani-verifier
+#   cargo kani-setup
+#   cargo kani
+
+name: Kani
+
+on:
+  schedule:
+    # Sunday 04:00 UTC.
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kani-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kani:
+    name: Kani proofs
+    runs-on: ubuntu-latest
+    # Kani install + setup is heavy; allow ~45 min.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Kani
+        uses: model-checking/kani-github-action@v1
+        with:
+          enable-propproof: false
+          args: |
+            --tests
+
+      - name: Run Kani proofs
+        run: cargo kani

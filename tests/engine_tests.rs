@@ -184,7 +184,7 @@ mod tests {
 
             #[test]
             fn test_engine_invalid_template_path() {
-                let mut engine = Engine::new(
+                let engine = Engine::new(
                     "invalid/path",
                     Duration::from_secs(60),
                 );
@@ -209,7 +209,7 @@ mod tests {
                     temp_dir.path().to_str().unwrap()
                 );
 
-                let mut engine = Engine::new(
+                let engine = Engine::new(
                     temp_dir.path().to_str().unwrap(),
                     Duration::from_secs(60),
                 );
@@ -237,7 +237,7 @@ mod tests {
 
             #[test]
             fn test_render_page_missing_file() {
-                let mut engine = Engine::new(
+                let engine = Engine::new(
                     "missing/path",
                     Duration::from_secs(60),
                 );
@@ -313,39 +313,57 @@ mod tests {
 
             #[test]
             fn test_clear_cache() {
-                let mut engine =
+                let engine =
                     Engine::new("templates", Duration::from_secs(3600));
 
                 let _ = engine
                     .render_cache
+                    .lock()
+                    .unwrap()
                     .insert("key1".to_string(), "value1".to_string());
-                assert!(!engine.render_cache.is_empty());
+                assert!(!engine
+                    .render_cache
+                    .lock()
+                    .unwrap()
+                    .is_empty());
 
                 // Clear the cache
                 engine.clear_cache();
-                assert!(engine.render_cache.is_empty());
+                assert!(engine.render_cache.lock().unwrap().is_empty());
             }
 
             #[test]
             fn test_set_max_cache_size() {
-                let mut engine =
+                let engine =
                     Engine::new("templates", Duration::from_secs(3600));
 
                 let _ = engine
                     .render_cache
+                    .lock()
+                    .unwrap()
                     .insert("key1".to_string(), "value1".to_string());
                 let _ = engine
                     .render_cache
+                    .lock()
+                    .unwrap()
                     .insert("key2".to_string(), "value2".to_string());
-                assert_eq!(engine.render_cache.len(), 2);
+                assert_eq!(
+                    engine.render_cache.lock().unwrap().len(),
+                    2
+                );
 
                 // LRU-bounded: capping at 1 preserves existing entries
                 // until the next insert evicts down to the cap.
                 engine.set_max_cache_size(1);
                 let _ = engine
                     .render_cache
+                    .lock()
+                    .unwrap()
                     .insert("key3".to_string(), "value3".to_string());
-                assert_eq!(engine.render_cache.len(), 1);
+                assert_eq!(
+                    engine.render_cache.lock().unwrap().len(),
+                    1
+                );
             }
         }
     }

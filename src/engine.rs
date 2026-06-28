@@ -428,15 +428,22 @@ pub struct Engine {
     pub template_path: String,
     /// Cache for rendered templates keyed by `"{layout}:{ctx.hash()}"`.
     ///
+    /// Wrapped in `Mutex` (issue #36, v0.0.4) so `Engine` is `Send + Sync`
+    /// and `render_page` can take `&self` — making the engine sharable
+    /// across threads / async tasks via `Arc<Engine>` without the
+    /// `Arc<Mutex<Engine>>` envelope users previously had to write.
+    /// The lock is held only across the cache lookup or insert; the
+    /// expensive render work happens outside it.
+    ///
     /// # Examples
     ///
     /// ```
     /// use staticweaver::Engine;
     /// use std::time::Duration;
     /// let engine = Engine::new("", Duration::from_secs(60));
-    /// assert_eq!(engine.render_cache.len(), 0);
+    /// assert_eq!(engine.render_cache.lock().unwrap().len(), 0);
     /// ```
-    pub render_cache: Cache<String, String>,
+    pub render_cache: std::sync::Mutex<Cache<String, String>>,
     /// Opening delimiter for template tags. Defaults to `"{{"`.
     ///
     /// # Examples
@@ -599,7 +606,7 @@ impl Engine {
     pub fn new(template_path: &str, cache_ttl: Duration) -> Self {
         Self {
             template_path: template_path.to_string(),
-            render_cache: Cache::new(cache_ttl),
+            render_cache: std::sync::Mutex::new(Cache::new(cache_ttl)),
             open_delim: "{{".to_string(),
             close_delim: "}}".to_string(),
             escape_html: true,
@@ -655,7 +662,7 @@ impl Engine {
     ) -> Self {
         Self {
             template_path: String::new(),
-            render_cache: Cache::new(cache_ttl),
+            render_cache: std::sync::Mutex::new(Cache::new(cache_ttl)),
             open_delim: "{{".to_string(),
             close_delim: "}}".to_string(),
             escape_html: true,
@@ -874,8 +881,17 @@ impl Engine {
     /// let rendered = engine.render_page(&context, "index").unwrap();
     /// assert_eq!(rendered, "Hello, World!");
     /// ```
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            level = "debug",
+            name = "staticweaver.render_page",
+            skip(self, context),
+            fields(layout = %layout, context.len = context.len()),
+        )
+    )]
     pub fn render_page(
-        &mut self,
+        &self,
         context: &Context,
         layout: &str,
     ) -> Result<String, EngineError> {
@@ -885,8 +901,16 @@ impl Engine {
 
         let cache_key = format!("{}:{}", layout, context.hash());
 
-        // Return cached result if available
-        if let Some(cached) = self.render_cache.get(&cache_key) {
+        // Return cached result if available. The Mutex (issue #36)
+        // is held only across the lookup — the expensive render work
+        // below happens outside it, so concurrent render_page calls
+        // for *different* keys parallelise.
+        if let Some(cached) = self
+            .render_cache
+            .lock()
+            .expect("cache poisoned")
+            .get(&cache_key)
+        {
             return Ok(cached.to_string());
         }
 
@@ -897,30 +921,44 @@ impl Engine {
         // Per-extension auto-escape policy: if the user opted in
         // via `autoescape_on(&[".html", …])`, the layout's own
         // extension decides whether substitutions get escaped, not
-        // the global `escape_html` flag. Save / restore the flag
-        // around the render so the engine state stays clean for
-        // subsequent calls (and so render_template — which has no
-        // layout name — continues to use the global setting).
-        let saved_escape = self.escape_html;
-        if !self.autoescape_extensions.is_empty() {
-            self.escape_html = self
-                .autoescape_extensions
+        // the global `escape_html` flag. The decision is computed
+        // here and passed all the way down through render_resolved /
+        // render_recursive — no mutation of `self.escape_html`
+        // (which would make render_page require `&mut self` and
+        // race across concurrent renders).
+        let effective_escape = if self.autoescape_extensions.is_empty()
+        {
+            self.escape_html
+        } else {
+            self.autoescape_extensions
                 .iter()
-                .any(|ext| layout.ends_with(ext.as_str()));
-        }
+                .any(|ext| layout.ends_with(ext.as_str()))
+        };
 
         // Render the template with the provided context.
-        let rendered = self.render_template(&template_content, context);
+        let mut output = String::with_capacity(template_content.len());
+        let _ = self.render_resolved(
+            &template_content,
+            &template_content,
+            context,
+            BlockOverrides::new(),
+            &mut output,
+            0,
+            effective_escape,
+        )?;
 
-        // Restore the global flag before propagating the result so
-        // an error mid-render doesn't leak the override.
-        self.escape_html = saved_escape;
-        let rendered = rendered?;
+        // Cache the rendered result for future use. Lock-and-insert
+        // is a separate critical section from the lookup above — a
+        // concurrent insert for the same key races but is harmless
+        // (last-writer wins; both renders produce the same bytes
+        // because the inputs are identical).
+        let _ = self
+            .render_cache
+            .lock()
+            .expect("cache poisoned")
+            .insert(cache_key, output.clone());
 
-        // Cache the rendered result for future use
-        let _ = self.render_cache.insert(cache_key, rendered.clone());
-
-        Ok(rendered)
+        Ok(output)
     }
 
     /// Renders a raw template string against the provided `context`.
@@ -958,6 +996,15 @@ impl Engine {
     /// ).unwrap();
     /// assert_eq!(out, "a b ");
     /// ```
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            level = "debug",
+            name = "staticweaver.render_template",
+            skip(self, context),
+            fields(template.bytes = template.len()),
+        )
+    )]
     pub fn render_template(
         &self,
         template: &str,
@@ -979,6 +1026,7 @@ impl Engine {
             BlockOverrides::new(),
             &mut output,
             0,
+            self.escape_html,
         )?;
         Ok(output)
     }
@@ -1050,7 +1098,7 @@ impl Engine {
     /// engine.render_page_to(&ctx, "index", &mut out).unwrap();
     /// ```
     pub fn render_page_to<W: Write>(
-        &mut self,
+        &self,
         context: &Context,
         layout: &str,
         writer: &mut W,
@@ -1075,6 +1123,7 @@ impl Engine {
         mut accumulated: BlockOverrides,
         output: &mut String,
         depth: usize,
+        escape_html: bool,
     ) -> Result<FlowSignal, EngineError> {
         if depth > MAX_RENDER_DEPTH {
             return Err(EngineError::Render(format!(
@@ -1101,6 +1150,7 @@ impl Engine {
                     accumulated,
                     output,
                     depth + 1,
+                    escape_html,
                 )
             }
             None => self.render_recursive(
@@ -1111,6 +1161,7 @@ impl Engine {
                 None,
                 output,
                 depth,
+                escape_html,
             ),
         }
     }
@@ -1138,6 +1189,7 @@ impl Engine {
         super_body: Option<&str>,
         output: &mut String,
         depth: usize,
+        escape_html: bool,
     ) -> Result<FlowSignal, EngineError> {
         if depth > MAX_RENDER_DEPTH {
             return Err(EngineError::Render(format!(
@@ -1267,6 +1319,7 @@ impl Engine {
                         super_body,
                         output,
                         depth + 1,
+                        escape_html,
                     )?;
                     // Propagate Break/Continue upward; the
                     // enclosing #each (if any) handles it.
@@ -1424,6 +1477,7 @@ impl Engine {
                         super_body,
                         output,
                         depth + 1,
+                        escape_html,
                     )?;
                     // `#each` is the loop-control sink:
                     //   * Break  -> stop iterating, render normally
@@ -1475,6 +1529,7 @@ impl Engine {
                         None,
                         output,
                         depth + 1,
+                        escape_html,
                     )?;
                     if signal != FlowSignal::Done {
                         return Ok(signal);
@@ -1546,6 +1601,7 @@ impl Engine {
                     super_for_body,
                     output,
                     depth + 1,
+                    escape_html,
                 )?;
                 if signal != FlowSignal::Done {
                     return Ok(signal);
@@ -1608,6 +1664,7 @@ impl Engine {
                     None,
                     output,
                     depth + 1,
+                    escape_html,
                 )?;
                 rest = after_tag;
                 continue;
@@ -1681,9 +1738,8 @@ impl Engine {
             // A trailing `safe` filter marks the value as already-safe
             // HTML and suppresses the engine's auto-escape. Mirrors the
             // `{{!key}}` raw opt-out but composes inside a filter chain.
-            let marked_safe = filters
-                .last()
-                .map_or(false, |(name, _)| name == "safe");
+            let marked_safe =
+                filters.last().is_some_and(|(name, _)| name == "safe");
 
             for (name, args) in &filters {
                 // The `json` filter (feature `json`) needs the
@@ -1708,7 +1764,7 @@ impl Engine {
                 };
             }
 
-            if raw || marked_safe || !self.escape_html {
+            if raw || marked_safe || !escape_html {
                 output.push_str(&rendered);
             } else {
                 escape_html_into(&rendered, output);
@@ -1756,8 +1812,11 @@ impl Engine {
     /// let mut engine = Engine::new("t", Duration::from_secs(60));
     /// engine.set_max_cache_size(10);
     /// ```
-    pub fn set_max_cache_size(&mut self, size: usize) {
-        self.render_cache.set_capacity(size);
+    pub fn set_max_cache_size(&self, size: usize) {
+        self.render_cache
+            .lock()
+            .expect("cache poisoned")
+            .set_capacity(size);
     }
 
     /// Drops all entries from the internal rendering cache.
@@ -1771,8 +1830,8 @@ impl Engine {
     /// let mut engine = Engine::new("t", Duration::from_secs(60));
     /// engine.clear_cache();
     /// ```
-    pub fn clear_cache(&mut self) {
-        self.render_cache.clear();
+    pub fn clear_cache(&self) {
+        self.render_cache.lock().expect("cache poisoned").clear();
     }
 
     /// Prepares a local directory for template storage.
@@ -1979,6 +2038,226 @@ impl Engine {
 
         let mut out = File::create(&file_path)?;
         out.write_all(&bytes)?;
+        Ok(())
+    }
+}
+
+// ── Async render surface (issue #37 + #38) ──────────────────────────
+//
+// Hidden behind `#[cfg(feature = "async")]` so default builds stay
+// sync-only. The render machinery itself is CPU-bound and remains
+// sync; the async surface only wraps the loader IO so callers in
+// async runtimes don't have to spawn_blocking just to fetch a
+// template body.
+
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+impl Engine {
+    /// Async counterpart to [`Engine::render_template`]: loads the
+    /// named template via `loader` (asynchronously), then renders
+    /// it synchronously against `context`. Issue #37.
+    ///
+    /// The render itself is CPU-bound and stays sync — the async-ness
+    /// comes from the loader IO. If you already have the template
+    /// body in memory, prefer `render_template` directly.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires the `async-tokio` feature + a tokio runtime.
+    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use staticweaver::{Context, Engine};
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("hi".to_string(), "Hello {{name}}!".to_string());
+    /// let loader = MemoryAsyncLoader::new(store);
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("name".to_string(), "Ada".to_string());
+    /// let out = engine.render_template_async(&loader, "hi", &ctx).await?;
+    /// assert_eq!(out, "Hello Ada!");
+    /// # Ok(()) }
+    /// ```
+    pub async fn render_template_async<L>(
+        &self,
+        loader: &L,
+        name: &str,
+        context: &Context,
+    ) -> Result<String, EngineError>
+    where
+        L: crate::loader_async::AsyncTemplateLoader,
+    {
+        let body = loader.load(name).await?;
+        self.render_template(&body, context)
+    }
+
+    /// Async counterpart to [`Engine::render_page`]: loads the layout
+    /// via `loader`, applies the per-extension auto-escape policy,
+    /// renders, and memoises the result in the same Mutex-protected
+    /// `render_cache` the sync path uses. Issue #37.
+    ///
+    /// Two concurrent async tasks calling this with the same key
+    /// race the insert harmlessly — both produce identical bytes
+    /// because the inputs are identical.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires the `async-tokio` feature + a tokio runtime.
+    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use staticweaver::{Context, Engine};
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("page".to_string(), "v={{v}}".to_string());
+    /// let loader = MemoryAsyncLoader::new(store);
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("v".to_string(), "ok".to_string());
+    /// let out = engine.render_page_async(&loader, &ctx, "page").await?;
+    /// assert_eq!(out, "v=ok");
+    /// # Ok(()) }
+    /// ```
+    pub async fn render_page_async<L>(
+        &self,
+        loader: &L,
+        context: &Context,
+        layout: &str,
+    ) -> Result<String, EngineError>
+    where
+        L: crate::loader_async::AsyncTemplateLoader,
+    {
+        validate_path(layout)?;
+
+        let cache_key = format!("{}:{}", layout, context.hash());
+        if let Some(cached) = self
+            .render_cache
+            .lock()
+            .expect("cache poisoned")
+            .get(&cache_key)
+        {
+            return Ok(cached.to_string());
+        }
+
+        let template_content = loader.load(layout).await?;
+        let effective_escape = if self.autoescape_extensions.is_empty()
+        {
+            self.escape_html
+        } else {
+            self.autoescape_extensions
+                .iter()
+                .any(|ext| layout.ends_with(ext.as_str()))
+        };
+
+        let mut output = String::with_capacity(template_content.len());
+        let _ = self.render_resolved(
+            &template_content,
+            &template_content,
+            context,
+            BlockOverrides::new(),
+            &mut output,
+            0,
+            effective_escape,
+        )?;
+
+        let _ = self
+            .render_cache
+            .lock()
+            .expect("cache poisoned")
+            .insert(cache_key, output.clone());
+
+        Ok(output)
+    }
+
+    /// Async streaming sink — issue #38. Mirror of
+    /// [`Engine::render_to`] for `AsyncWrite`-flavoured destinations
+    /// (`tokio::fs::File`, `tokio::net::TcpStream`, an Axum body
+    /// channel). The render itself stays sync; the bytes flush
+    /// through the async writer.
+    ///
+    /// Requires the `async-tokio` feature for the `AsyncWriteExt`
+    /// extension trait.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires the `async-tokio` feature + a tokio runtime.
+    /// use staticweaver::{Context, Engine};
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("who".to_string(), "world".to_string());
+    /// let mut sink: Vec<u8> = Vec::new();
+    /// engine.render_to_async("hi {{who}}", &ctx, &mut sink).await?;
+    /// assert_eq!(&sink, b"hi world");
+    /// # Ok(()) }
+    /// ```
+    #[cfg(feature = "async-tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async-tokio")))]
+    pub async fn render_to_async<W>(
+        &self,
+        template: &str,
+        context: &Context,
+        writer: &mut W,
+    ) -> Result<(), EngineError>
+    where
+        W: tokio::io::AsyncWrite + Unpin + Send,
+    {
+        use tokio::io::AsyncWriteExt;
+        let body = self.render_template(template, context)?;
+        writer.write_all(body.as_bytes()).await?;
+        Ok(())
+    }
+
+    /// Page-flavoured async streaming sink — issue #38. Combines
+    /// async load + sync render + async write into one call. Errors
+    /// surface as `EngineError`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires the `async-tokio` feature + a tokio runtime.
+    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use staticweaver::{Context, Engine};
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("p".to_string(), "[{{a}}]".to_string());
+    /// let loader = MemoryAsyncLoader::new(store);
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("a".to_string(), "ok".to_string());
+    /// let mut sink: Vec<u8> = Vec::new();
+    /// engine.render_page_to_async(&loader, &ctx, "p", &mut sink).await?;
+    /// assert_eq!(&sink, b"[ok]");
+    /// # Ok(()) }
+    /// ```
+    #[cfg(feature = "async-tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async-tokio")))]
+    pub async fn render_page_to_async<L, W>(
+        &self,
+        loader: &L,
+        context: &Context,
+        layout: &str,
+        writer: &mut W,
+    ) -> Result<(), EngineError>
+    where
+        L: crate::loader_async::AsyncTemplateLoader,
+        W: tokio::io::AsyncWrite + Unpin + Send,
+    {
+        use tokio::io::AsyncWriteExt;
+        let body =
+            self.render_page_async(loader, context, layout).await?;
+        writer.write_all(body.as_bytes()).await?;
         Ok(())
     }
 }
@@ -2451,7 +2730,7 @@ fn number_format(
     if int_part.is_empty()
         || !int_part.chars().all(|c| c.is_ascii_digit())
         || frac_part
-            .map_or(false, |f| !f.chars().all(|c| c.is_ascii_digit()))
+            .is_some_and(|f| !f.chars().all(|c| c.is_ascii_digit()))
     {
         return Err(EngineError::Render(format!(
             "number_format filter: expected a number, got `{input}`"
@@ -3606,6 +3885,54 @@ fn scan_existing_entity(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+// ── Kani formal-verification harness (issue #43) ────────────────────
+//
+// Hidden behind `#[cfg(kani)]` — invisible to ordinary builds. Run with
+// `cargo kani` (after `cargo install --locked kani-verifier` and
+// `cargo kani-setup`). Verifies that `escape_html_into` is a fixed
+// point: feeding its own output back in produces byte-identical output.
+// This is the ssg#589 idempotency contract, hardened from
+// proptest-defended (random seeds) to formally proven over the
+// symbolic horizon Kani can solve in reasonable time.
+#[cfg(kani)]
+mod kani_proofs {
+    use super::escape_html_into;
+
+    /// `escape(escape(x)) == escape(x)` for any 4-byte input.
+    /// The 4-byte horizon is small enough that Kani's bit-blasting SAT
+    /// solver completes in seconds; large enough to cover every
+    /// combination of `<`, `>`, `&`, `"`, `'`, `;`, ASCII alnum, and
+    /// non-ASCII high bytes.
+    #[kani::proof]
+    #[kani::unwind(8)]
+    fn proof_escape_is_idempotent() {
+        let bytes: [u8; 4] = kani::any();
+        // Restrict to valid UTF-8 — that's what `&str` guarantees the
+        // engine sees.
+        if let Ok(s) = core::str::from_utf8(&bytes) {
+            let mut once = String::new();
+            escape_html_into(s, &mut once);
+            let mut twice = String::new();
+            escape_html_into(&once, &mut twice);
+            assert_eq!(once, twice);
+        }
+    }
+
+    /// Output never contains a bare `<` or `>` — both unconditionally
+    /// escape.
+    #[kani::proof]
+    #[kani::unwind(8)]
+    fn proof_no_bare_angle_brackets() {
+        let bytes: [u8; 4] = kani::any();
+        if let Ok(s) = core::str::from_utf8(&bytes) {
+            let mut out = String::new();
+            escape_html_into(s, &mut out);
+            assert!(!out.contains('<'));
+            assert!(!out.contains('>'));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4249,7 +4576,7 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let layout = temp.path().join("hello.html");
         fs::write(&layout, "Hello, {{name}}!").unwrap();
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -4272,10 +4599,7 @@ mod tests {
     fn annotate_pos_passes_through_io_errors() {
         // Only InvalidTemplate / Render get position-stamped; Io
         // (and other variants) flow through unchanged.
-        let err = EngineError::Io(io::Error::new(
-            io::ErrorKind::Other,
-            "raw",
-        ));
+        let err = EngineError::Io(io::Error::other("raw"));
         let template = "abc";
         let wrapped = annotate_pos(err, template, &template[..1]);
         match wrapped {
@@ -4706,7 +5030,7 @@ mod tests {
              {{/each}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -4733,7 +5057,7 @@ mod tests {
             "child".to_string(),
             "{{#extends \"base\"}}{{#block \"x\"}}body{{/block}}{{ unclosed".to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -4787,10 +5111,10 @@ mod tests {
         struct Bomb;
         impl Write for Bomb {
             fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-                Err(io::Error::new(io::ErrorKind::Other, "x"))
+                Err(io::Error::other("x"))
             }
             fn flush(&mut self) -> io::Result<()> {
-                Err(io::Error::new(io::ErrorKind::Other, "x"))
+                Err(io::Error::other("x"))
             }
         }
         let engine = Engine::new("", Duration::from_secs(60));
@@ -4868,7 +5192,7 @@ mod tests {
              {{/each}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5123,7 +5447,7 @@ mod tests {
             "page".to_string(),
             "{{#block bareword}}body{{/block}}".to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5430,7 +5754,7 @@ mod tests {
              {{#block \"body\"}}( {{ super() }} )-OVR{{/block}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5467,7 +5791,7 @@ mod tests {
         );
         let _ = store
             .insert("p".to_string(), "<{{ super() }}>".to_string());
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5494,7 +5818,7 @@ mod tests {
              {{#block \"hi\"}}>>> {{ super() }} <<<{{/block}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5514,7 +5838,7 @@ mod tests {
             "greet".to_string(),
             "Hello, {{name}}!".to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(map)),
             Duration::from_secs(60),
         );
@@ -5534,7 +5858,7 @@ mod tests {
         );
         let _ =
             map.insert("inner".to_string(), "<{{name}}>".to_string());
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(map)),
             Duration::from_secs(60),
         );
@@ -5557,7 +5881,7 @@ mod tests {
             "{{#extends \"base\"}}{{#block \"body\"}}OVR{{/block}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(map)),
             Duration::from_secs(60),
         );
@@ -5572,7 +5896,7 @@ mod tests {
             Arc::new(MemoryLoader::default()),
             Duration::from_secs(60),
         );
-        let mut engine = engine;
+        let engine = engine;
         let ctx = Context::new();
         let err = engine.render_page(&ctx, "missing").unwrap_err();
         assert!(matches!(err, EngineError::Io(_)), "{err:?}");
@@ -5603,7 +5927,7 @@ mod tests {
         // still walks the filesystem.
         let temp = tempfile::TempDir::new().unwrap();
         fs::write(temp.path().join("p.html"), "default {{w}}").unwrap();
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -6251,7 +6575,7 @@ mod tests {
         struct Bomb;
         impl Write for Bomb {
             fn write(&mut self, _b: &[u8]) -> io::Result<usize> {
-                Err(io::Error::new(io::ErrorKind::Other, "no"))
+                Err(io::Error::other("no"))
             }
             fn flush(&mut self) -> io::Result<()> {
                 Ok(())
@@ -7659,8 +7983,7 @@ mod tests {
 
     #[test]
     fn test_render_page_rejects_path_traversal() {
-        let mut engine =
-            Engine::new("templates", Duration::from_secs(60));
+        let engine = Engine::new("templates", Duration::from_secs(60));
         let context = Context::new();
         // `a/b` is now allowed; only `..`, absolute paths, and nulls
         // are rejected.
@@ -7684,7 +8007,7 @@ mod tests {
         let template_path = sub_dir.join("post.html");
         fs::write(&template_path, "Post: {{title}}").unwrap();
 
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp_dir.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -7992,7 +8315,7 @@ mod tests {
         let template_path = temp_dir.path().join("template.html");
         fs::write(&template_path, "Hello, {{name}}!").unwrap();
 
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp_dir.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -8005,48 +8328,58 @@ mod tests {
 
     #[test]
     fn test_clear_cache() {
-        let mut engine =
+        let engine =
             Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("key1".to_string(), "value1".to_string());
-        assert!(!engine.render_cache.is_empty());
+        assert!(!engine.render_cache.lock().unwrap().is_empty());
 
         engine.clear_cache();
-        assert!(engine.render_cache.is_empty());
+        assert!(engine.render_cache.lock().unwrap().is_empty());
     }
 
     #[test]
     fn test_set_max_cache_size() {
-        let mut engine =
+        let engine =
             Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("key1".to_string(), "value1".to_string());
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("key2".to_string(), "value2".to_string());
-        assert_eq!(engine.render_cache.len(), 2);
+        assert_eq!(engine.render_cache.lock().unwrap().len(), 2);
 
         // Capping at 1 doesn't wipe existing entries; subsequent inserts
         // evict the least-recently-used entry to stay within the cap.
         engine.set_max_cache_size(1);
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("key3".to_string(), "value3".to_string());
-        assert_eq!(engine.render_cache.len(), 1);
+        assert_eq!(engine.render_cache.lock().unwrap().len(), 1);
     }
 
     #[test]
     fn set_max_cache_size_noop_when_under_limit() {
-        let mut engine =
+        let engine =
             Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("k".to_string(), "v".to_string());
         engine.set_max_cache_size(8);
         assert_eq!(
-            engine.render_cache.len(),
+            engine.render_cache.lock().unwrap().len(),
             1,
             "no-op branch must preserve cache when len() <= max_size"
         );
@@ -8061,7 +8394,7 @@ mod tests {
         let tpl = temp.path().join("page.html");
         fs::write(&tpl, "hi {{name}}").unwrap();
 
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -8069,7 +8402,7 @@ mod tests {
         ctx.set("name".to_string(), "alice".to_string());
 
         let first = engine.render_page(&ctx, "page").unwrap();
-        assert_eq!(engine.render_cache.len(), 1);
+        assert_eq!(engine.render_cache.lock().unwrap().len(), 1);
 
         // Overwrite the template file; a cached render returns the old
         // output, proving the second call is served from cache rather
