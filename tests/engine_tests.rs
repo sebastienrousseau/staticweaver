@@ -321,7 +321,11 @@ mod tests {
                     .lock()
                     .unwrap()
                     .insert("key1".to_string(), "value1".to_string());
-                assert!(!engine.render_cache.lock().unwrap().is_empty());
+                assert!(!engine
+                    .render_cache
+                    .lock()
+                    .unwrap()
+                    .is_empty());
 
                 // Clear the cache
                 engine.clear_cache();
@@ -343,7 +347,10 @@ mod tests {
                     .lock()
                     .unwrap()
                     .insert("key2".to_string(), "value2".to_string());
-                assert_eq!(engine.render_cache.lock().unwrap().len(), 2);
+                assert_eq!(
+                    engine.render_cache.lock().unwrap().len(),
+                    2
+                );
 
                 // LRU-bounded: capping at 1 preserves existing entries
                 // until the next insert evicts down to the cap.
@@ -353,7 +360,10 @@ mod tests {
                     .lock()
                     .unwrap()
                     .insert("key3".to_string(), "value3".to_string());
-                assert_eq!(engine.render_cache.lock().unwrap().len(), 1);
+                assert_eq!(
+                    engine.render_cache.lock().unwrap().len(),
+                    1
+                );
             }
         }
     }

@@ -402,7 +402,7 @@ impl<K: Hash + Eq + Clone, V: Clone> Cache<K, V> {
     pub fn contains_key(&self, key: &K) -> bool {
         self.items
             .get(key)
-            .map_or(false, |item| item.expiration > Instant::now())
+            .is_some_and(|item| item.expiration > Instant::now())
     }
 
     /// Gets the remaining time-to-live for an item.

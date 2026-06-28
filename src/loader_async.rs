@@ -58,8 +58,9 @@ pub trait AsyncTemplateLoader: Send + Sync {
     fn load(
         &self,
         name: &str,
-    ) -> impl std::future::Future<Output = Result<Cow<'_, str>, EngineError>>
-           + Send;
+    ) -> impl std::future::Future<
+        Output = Result<Cow<'_, str>, EngineError>,
+    > + Send;
 }
 
 /// Default async loader backed by `tokio::fs`. Equivalent to the sync
@@ -112,7 +113,9 @@ pub struct MemoryAsyncLoader {
 impl MemoryAsyncLoader {
     /// Build a `MemoryAsyncLoader` from a `(name -> body)` map.
     #[must_use]
-    pub fn new(store: std::collections::HashMap<String, String>) -> Self {
+    pub fn new(
+        store: std::collections::HashMap<String, String>,
+    ) -> Self {
         Self { store }
     }
 }
@@ -122,12 +125,13 @@ impl AsyncTemplateLoader for MemoryAsyncLoader {
         &self,
         name: &str,
     ) -> Result<Cow<'_, str>, EngineError> {
-        self.store.get(name).map(|s| Cow::Borrowed(s.as_str())).ok_or_else(
-            || {
+        self.store
+            .get(name)
+            .map(|s| Cow::Borrowed(s.as_str()))
+            .ok_or_else(|| {
                 EngineError::ResourceNotFound(format!(
                     "template `{name}` not found in MemoryAsyncLoader"
                 ))
-            },
-        )
+            })
     }
 }

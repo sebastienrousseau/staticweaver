@@ -80,9 +80,9 @@ fn arc_engine_renders_identical_output_across_threads() {
         let expected = expected.clone();
         handles.push(thread::spawn(move || {
             for _ in 0..1_000 {
-                let out = engine
-                    .render_page(&ctx, "page")
-                    .expect("render_page must not error under concurrency");
+                let out = engine.render_page(&ctx, "page").expect(
+                    "render_page must not error under concurrency",
+                );
                 assert_eq!(
                     out, expected,
                     "concurrent renders must produce identical output",
@@ -107,17 +107,30 @@ fn arc_engine_renders_different_keys_in_parallel() {
         let mut ctx = Context::new();
         ctx.set("name".to_string(), format!("worker-{id}"));
         ctx.set_value("id".to_string(), id as i64);
-        expected_per_thread.push((ctx, engine.render_page(&{
-            let mut c = Context::new();
-            c.set("name".to_string(), format!("worker-{id}"));
-            c.set_value("id".to_string(), id as i64);
-            c
-        }, "page").unwrap()));
+        expected_per_thread.push((
+            ctx,
+            engine
+                .render_page(
+                    &{
+                        let mut c = Context::new();
+                        c.set(
+                            "name".to_string(),
+                            format!("worker-{id}"),
+                        );
+                        c.set_value("id".to_string(), id as i64);
+                        c
+                    },
+                    "page",
+                )
+                .unwrap(),
+        ));
     }
 
     let engine_outer = Arc::clone(&engine);
     let mut handles = Vec::new();
-    for (id, (ctx, expected)) in expected_per_thread.into_iter().enumerate() {
+    for (id, (ctx, expected)) in
+        expected_per_thread.into_iter().enumerate()
+    {
         let engine = Arc::clone(&engine_outer);
         handles.push(thread::spawn(move || {
             for _ in 0..500 {
@@ -130,7 +143,8 @@ fn arc_engine_renders_different_keys_in_parallel() {
         }));
     }
     for h in handles {
-        h.join().expect("thread panicked under per-key concurrent render");
+        h.join()
+            .expect("thread panicked under per-key concurrent render");
     }
 }
 

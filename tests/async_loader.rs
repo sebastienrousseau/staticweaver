@@ -31,10 +31,8 @@ fn shared_engine() -> Arc<Engine> {
 #[tokio::test]
 async fn memory_async_loader_round_trip() {
     let mut store = HashMap::new();
-    let _ = store.insert(
-        "hello".to_string(),
-        "Hi, {{name}}!".to_string(),
-    );
+    let _ =
+        store.insert("hello".to_string(), "Hi, {{name}}!".to_string());
     let loader = MemoryAsyncLoader::new(store);
 
     let engine = shared_engine();
@@ -51,8 +49,7 @@ async fn memory_async_loader_round_trip() {
 #[tokio::test]
 async fn render_page_async_uses_same_cache_as_sync_path() {
     let mut store = HashMap::new();
-    let _ = store
-        .insert("page".to_string(), "v={{v}}".to_string());
+    let _ = store.insert("page".to_string(), "v={{v}}".to_string());
     let loader = MemoryAsyncLoader::new(store);
 
     let engine = shared_engine();
@@ -117,8 +114,7 @@ async fn tokio_fs_loader_reads_a_real_file() {
 #[tokio::test]
 async fn render_page_to_async_combined_path() {
     let mut store = HashMap::new();
-    let _ = store
-        .insert("p".to_string(), "[{{a}}]".to_string());
+    let _ = store.insert("p".to_string(), "[{{a}}]".to_string());
     let loader = MemoryAsyncLoader::new(store);
 
     let engine = shared_engine();
@@ -139,17 +135,17 @@ async fn arc_engine_concurrent_async_renders() {
     // tokio runtime: many tasks share an Arc<Engine> and a single
     // loader, must all produce identical output.
     let mut store = HashMap::new();
-    let _ = store.insert(
-        "page".to_string(),
-        "hi {{name}}".to_string(),
-    );
+    let _ = store.insert("page".to_string(), "hi {{name}}".to_string());
     let loader = Arc::new(MemoryAsyncLoader::new(store));
     let engine = shared_engine();
 
     let mut ctx = Context::new();
     ctx.set("name".to_string(), "Ada".to_string());
     let ctx = Arc::new(ctx);
-    let expected = engine.render_page_async(&*loader, &ctx, "page").await.unwrap();
+    let expected = engine
+        .render_page_async(&*loader, &ctx, "page")
+        .await
+        .unwrap();
 
     let mut handles = Vec::new();
     for _ in 0..8 {
@@ -162,12 +158,16 @@ async fn arc_engine_concurrent_async_renders() {
                 let out = engine
                     .render_page_async(&*loader, &ctx, "page")
                     .await
-                    .expect("async render must not error under concurrency");
+                    .expect(
+                        "async render must not error under concurrency",
+                    );
                 assert_eq!(out, expected);
             }
         }));
     }
     for h in handles {
-        h.await.expect("tokio task panicked under async concurrent render");
+        h.await.expect(
+            "tokio task panicked under async concurrent render",
+        );
     }
 }

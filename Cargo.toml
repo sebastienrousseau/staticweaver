@@ -210,6 +210,15 @@ path = "examples/axum.rs"
 required-features = ["axum-example"]
 
 [[example]]
+# Async render via Tokio (issues #37 + #38). Demonstrates
+# AsyncTemplateLoader, render_template_async, render_page_async,
+# render_to_async (AsyncWrite sink), and Arc<Engine> fan-out across
+# tokio tasks.
+name = "async_tokio"
+path = "examples/async_tokio.rs"
+required-features = ["async-tokio"]
+
+[[example]]
 # {{#extends}} + {{#block}} + {{ super() }} showcase. Uses
 # MemoryLoader so the example is self-contained.
 name = "inheritance"

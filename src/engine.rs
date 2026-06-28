@@ -905,8 +905,11 @@ impl Engine {
         // is held only across the lookup — the expensive render work
         // below happens outside it, so concurrent render_page calls
         // for *different* keys parallelise.
-        if let Some(cached) =
-            self.render_cache.lock().expect("cache poisoned").get(&cache_key)
+        if let Some(cached) = self
+            .render_cache
+            .lock()
+            .expect("cache poisoned")
+            .get(&cache_key)
         {
             return Ok(cached.to_string());
         }
@@ -923,7 +926,8 @@ impl Engine {
         // render_recursive — no mutation of `self.escape_html`
         // (which would make render_page require `&mut self` and
         // race across concurrent renders).
-        let effective_escape = if self.autoescape_extensions.is_empty() {
+        let effective_escape = if self.autoescape_extensions.is_empty()
+        {
             self.escape_html
         } else {
             self.autoescape_extensions
@@ -1734,9 +1738,8 @@ impl Engine {
             // A trailing `safe` filter marks the value as already-safe
             // HTML and suppresses the engine's auto-escape. Mirrors the
             // `{{!key}}` raw opt-out but composes inside a filter chain.
-            let marked_safe = filters
-                .last()
-                .map_or(false, |(name, _)| name == "safe");
+            let marked_safe =
+                filters.last().is_some_and(|(name, _)| name == "safe");
 
             for (name, args) in &filters {
                 // The `json` filter (feature `json`) needs the
@@ -2100,7 +2103,8 @@ impl Engine {
         }
 
         let template_content = loader.load(layout).await?;
-        let effective_escape = if self.autoescape_extensions.is_empty() {
+        let effective_escape = if self.autoescape_extensions.is_empty()
+        {
             self.escape_html
         } else {
             self.autoescape_extensions
@@ -2170,7 +2174,8 @@ impl Engine {
         W: tokio::io::AsyncWrite + Unpin + Send,
     {
         use tokio::io::AsyncWriteExt;
-        let body = self.render_page_async(loader, context, layout).await?;
+        let body =
+            self.render_page_async(loader, context, layout).await?;
         writer.write_all(body.as_bytes()).await?;
         Ok(())
     }
@@ -2644,7 +2649,7 @@ fn number_format(
     if int_part.is_empty()
         || !int_part.chars().all(|c| c.is_ascii_digit())
         || frac_part
-            .map_or(false, |f| !f.chars().all(|c| c.is_ascii_digit()))
+            .is_some_and(|f| !f.chars().all(|c| c.is_ascii_digit()))
     {
         return Err(EngineError::Render(format!(
             "number_format filter: expected a number, got `{input}`"
@@ -4513,10 +4518,7 @@ mod tests {
     fn annotate_pos_passes_through_io_errors() {
         // Only InvalidTemplate / Render get position-stamped; Io
         // (and other variants) flow through unchanged.
-        let err = EngineError::Io(io::Error::new(
-            io::ErrorKind::Other,
-            "raw",
-        ));
+        let err = EngineError::Io(io::Error::other("raw"));
         let template = "abc";
         let wrapped = annotate_pos(err, template, &template[..1]);
         match wrapped {
@@ -5028,10 +5030,10 @@ mod tests {
         struct Bomb;
         impl Write for Bomb {
             fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-                Err(io::Error::new(io::ErrorKind::Other, "x"))
+                Err(io::Error::other( "x"))
             }
             fn flush(&mut self) -> io::Result<()> {
-                Err(io::Error::new(io::ErrorKind::Other, "x"))
+                Err(io::Error::other( "x"))
             }
         }
         let engine = Engine::new("", Duration::from_secs(60));
@@ -6492,7 +6494,7 @@ mod tests {
         struct Bomb;
         impl Write for Bomb {
             fn write(&mut self, _b: &[u8]) -> io::Result<usize> {
-                Err(io::Error::new(io::ErrorKind::Other, "no"))
+                Err(io::Error::other( "no"))
             }
             fn flush(&mut self) -> io::Result<()> {
                 Ok(())
@@ -7900,8 +7902,7 @@ mod tests {
 
     #[test]
     fn test_render_page_rejects_path_traversal() {
-        let engine =
-            Engine::new("templates", Duration::from_secs(60));
+        let engine = Engine::new("templates", Duration::from_secs(60));
         let context = Context::new();
         // `a/b` is now allowed; only `..`, absolute paths, and nulls
         // are rejected.
@@ -8246,7 +8247,8 @@ mod tests {
 
     #[test]
     fn test_clear_cache() {
-        let engine = Engine::new("templates", Duration::from_secs(3600));
+        let engine =
+            Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
             .lock()
@@ -8260,7 +8262,8 @@ mod tests {
 
     #[test]
     fn test_set_max_cache_size() {
-        let engine = Engine::new("templates", Duration::from_secs(3600));
+        let engine =
+            Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
             .lock()
@@ -8286,7 +8289,8 @@ mod tests {
 
     #[test]
     fn set_max_cache_size_noop_when_under_limit() {
-        let engine = Engine::new("templates", Duration::from_secs(3600));
+        let engine =
+            Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
             .lock()

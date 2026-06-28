@@ -1,3 +1,71 @@
+# v0.0.4 — 2026-06-28
+
+The "make it shareable, observable, and verifiable" release. Twelve
+issues closed across concurrency, async, observability, formal
+verification, and supply chain. Three breaking changes; all
+deliberate, all called out.
+
+## Headline changes
+
+- **`Engine: Send + Sync + Clone`.** `render_page` and friends are now
+  `&self`; the render cache lives behind `std::sync::Mutex`. Multi-handler
+  Axum / Actix / Tokio fan-out users can finally share one
+  `Arc<Engine>` across tasks without the `Arc<Mutex<Engine>>` envelope
+  that serialised every render through one lock. Issue #36.
+- **Async surface.** New `async` and `async-tokio` features expose
+  `AsyncTemplateLoader`, `TokioFsLoader`, `MemoryAsyncLoader`, and
+  `Engine::render_{template,page,to,page_to}_async`. The render itself
+  stays sync (CPU-bound); the async-ness wraps the loader IO and the
+  optional `AsyncWrite` sink. Issues #37, #38.
+- **Tracing.** Opt-in `tracing` feature emits `tracing::instrument`
+  spans on the render hot path. Zero weight when off; full
+  span-and-field visibility when on. Issue #39.
+
+## Supply-chain hardening
+
+- **SBOM + Sigstore on every release** — `release.yml` now emits
+  CycloneDX + SPDX JSON, signs the `.crate` with cosign keyless OIDC,
+  and attaches everything to the GitHub Release. Issue #44.
+- **`cargo-vet`** initialised with imports from Mozilla, Google,
+  bytecode-alliance, Embark. CI gate. Issue #45.
+- **OSV-Scanner** CI job covering GHSA + RUSTSEC + crates.io. Issue #46.
+- **Miri** CI job (nightly, allowed-to-fail this cycle, hard gate
+  v0.0.5). Issue #42.
+- **Kani formal proofs** — two `#[cfg(kani)]` proofs against
+  `escape_html_into` (idempotency + no bare metachars). Weekly CI run.
+  Issue #43.
+- **Coverage-guided fuzzing** — three libfuzzer targets (`parse`,
+  `escape`, `dot_path`); nightly CI. Issue #41.
+
+## DX
+
+- **Cache stats** — `CacheStats` struct + `Cache::stats()` snapshot for
+  cheap export to prometheus / metrics / opentelemetry. Issue #40.
+- **`missing_docs = "deny"`** — 100% rustdoc coverage is now a
+  `cargo build` failure.
+- **Version-drift gate** — `scripts/check-version-consistency.sh`
+  fails CI if `README.md` install snippets drift from `Cargo.toml`,
+  preventing repeats of the v0.0.3 regression.
+
+## Breaking changes (call-outs)
+
+- `render_page` / `render_page_to` / `set_max_cache_size` /
+  `clear_cache` now take `&self`. Most callers won't notice; direct
+  field access to `engine.render_cache.X` must now go through
+  `engine.render_cache.lock().unwrap().X`.
+- MSRV raised 1.68 → 1.75 (for async fn in traits used by the new
+  `async` feature).
+
+## Upgrade
+
+```toml
+[dependencies]
+staticweaver = "0.0.4"
+```
+
+If you only use the sync surface, no code changes are required beyond
+the field-access shape mentioned above.
+
 # v0.0.3 — 2026-06-27
 
 This release closes a downstream regression and a latent correctness bug
