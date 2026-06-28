@@ -43,14 +43,14 @@
 
 ```toml
 [dependencies]
-staticweaver = "0.0.2"
+staticweaver = "0.0.4"
 ```
 
 ### Optional features
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.2", features = ["remote-templates", "json"] }
+staticweaver = { version = "0.0.4", features = ["remote-templates", "json"] }
 ```
 
 | Feature | Adds |
@@ -517,7 +517,7 @@ Bounded caches use **true LRU eviction**: when a new key would push the cache pa
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.2", features = ["remote-templates"] }
+staticweaver = { version = "0.0.4", features = ["remote-templates"] }
 ```
 
 ```rust,ignore
@@ -542,7 +542,7 @@ Without the feature, `create_template_folder(Some(url))` returns `EngineError::I
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.2", features = ["json"] }
+staticweaver = { version = "0.0.4", features = ["json"] }
 ```
 
 ```rust,ignore
@@ -747,9 +747,9 @@ The realistic differentiator: staticweaver is the only Rust template engine that
 <details>
 <summary><b>Is it production-ready? What's the stability story?</b></summary>
 
-`v0.0.2` is the first release that goes beyond Mustache-tier substitution. It's tested with **460+ tests** (lib, integration, snapshot, differential vs Minijinja, property-based via proptest), **99% line coverage**, and a **comparative bench matrix** vs Tera/Minijinja/Askama. Cross-platform CI runs on Linux, macOS, and Windows. `#![forbid(unsafe_code)]` is enforced at the crate root.
+`v0.0.3` is the latest release on crates.io. It builds on the `v0.0.2` cycle (which moved the engine beyond Mustache-tier substitution) with HTML-escape idempotency, opt-in lax mode, a collision-safe `Context::hash()`, a re-tuned escape fast path, and the full Dependabot backlog drained (including RUSTSEC-2026-0185 remediation). It's tested with **480+ tests** (lib, integration, snapshot, differential vs Minijinja, property-based via proptest, lax-mode matrix), **98% line-coverage floor enforced in CI**, **100% rustdoc example coverage compile-time-enforced** (`missing_docs = "deny"`), and a **comparative bench matrix** vs Tera/Minijinja/Askama. Cross-platform CI runs on Linux, macOS, and Windows. `#![forbid(unsafe_code)]` is enforced at the crate root.
 
-That said — it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.2"`) if you want to control upgrades manually.
+That said — it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.4"`) if you want to control upgrades manually.
 
 </details>
 

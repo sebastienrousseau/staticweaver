@@ -77,6 +77,16 @@ jobs:
           awk -v c="$cov" 'BEGIN {exit !(c+0 >= 98.0)}' \
             || { echo "::error::line coverage ${cov}% below 98% floor"; exit 1; }
 
+  # README ↔ Cargo.toml version consistency gate. Added in v0.0.4 after
+  # the v0.0.3 release shipped with README install snippets stuck at
+  # "0.0.2". Fast (~1s) so it can run on every push.
+  version-consistency:
+    name: README ↔ Cargo.toml version match
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/check-version-consistency.sh
+
   # Documentation build + coverage gate. Docs are published by docs.rs on
   # release; this job only smoke-tests that the crate documents cleanly
   # (no broken links, no missing docs) and keeps example coverage at 100%.

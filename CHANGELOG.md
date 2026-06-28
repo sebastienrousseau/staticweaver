@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (pre-`1.0.0`, breaking changes may occur in minor/patch releases and are
 called out explicitly below).
 
+## [Unreleased]
+
+### Added
+- CI gate `scripts/check-version-consistency.sh` enforces that every
+  `staticweaver = "x.y.z"` snippet in `README.md` matches the
+  `Cargo.toml` version. Added in v0.0.4 after the v0.0.3 release shipped
+  with README install snippets stuck at `0.0.2`.
+
 ## [0.0.3] - 2026-06-27
 
 ### Fixed

@@ -5,7 +5,7 @@
 [package]
 # General project metadata
 name = "staticweaver"                       # The name of the library
-version = "0.0.3"                           # Current version of the crate
+version = "0.0.4"                           # Current version of the crate (in-development)
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
 rust-version = "1.68"                       # MSRV (floor driven by thiserror 2.0 + regex 1.11 + serde_json 1.0)
