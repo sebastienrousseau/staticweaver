@@ -62,19 +62,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust nightly + Miri
-        run: |
-          rustup toolchain install nightly --component miri --profile minimal
-          rustup default nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: cargo miri setup
-        run: cargo miri setup
+        run: cargo +nightly miri setup
       - name: cargo miri test --lib
         env:
           # Skip Miri's strict isolation so filesystem-touching unit
           # tests (FsLoader smoke tests) can read template fixtures.
           MIRIFLAGS: "-Zmiri-disable-isolation"
-        run: cargo miri test --lib --no-fail-fast
+        run: cargo +nightly miri test --lib --no-fail-fast
 
   # OSV-Scanner — covers GHSA + RUSTSEC + crates.io advisories
   # (issue #46). Complements the existing `Rust CI / Audit` (cargo-audit
@@ -103,6 +103,12 @@ jobs:
   cargo-vet:
     name: cargo-vet
     runs-on: ubuntu-latest
+    # Soft gate for now (issue #45 initial cut). The remote audit
+    # imports (Mozilla hg, etc.) flake intermittently; promotion to
+    # hard gate is scheduled for v0.0.5 alongside the planned
+    # `cargo vet prune` pass that drops the imports that have proven
+    # least reliable.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

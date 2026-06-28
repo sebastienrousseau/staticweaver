@@ -5030,10 +5030,10 @@ mod tests {
         struct Bomb;
         impl Write for Bomb {
             fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-                Err(io::Error::other( "x"))
+                Err(io::Error::other("x"))
             }
             fn flush(&mut self) -> io::Result<()> {
-                Err(io::Error::other( "x"))
+                Err(io::Error::other("x"))
             }
         }
         let engine = Engine::new("", Duration::from_secs(60));
@@ -6494,7 +6494,7 @@ mod tests {
         struct Bomb;
         impl Write for Bomb {
             fn write(&mut self, _b: &[u8]) -> io::Result<usize> {
-                Err(io::Error::other( "no"))
+                Err(io::Error::other("no"))
             }
             fn flush(&mut self) -> io::Result<()> {
                 Ok(())

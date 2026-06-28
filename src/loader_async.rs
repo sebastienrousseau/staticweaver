@@ -9,14 +9,16 @@
 //! defeats the point of being in an async runtime in the first place.
 //!
 //! Gated behind the `async` feature so default builds stay
-//! dep-light. The reference implementation [`TokioFsLoader`] is
+//! dep-light. The reference implementation `TokioFsLoader` is
 //! further gated behind `async-tokio` so callers running on other
 //! executors (async-std, smol, glommio) aren't forced to pull in
-//! tokio.
+//! tokio. (Intentional plain code-span, not intradoc link —
+//! `TokioFsLoader` is itself feature-gated and an intradoc link
+//! would break the strict docs build under `--no-default-features`.)
 //!
 //! ## Bringing your own loader
 //!
-//! Implement [`AsyncTemplateLoader`] against whatever async backend
+//! Implement `AsyncTemplateLoader` against whatever async backend
 //! you have — a remote KV store, an embedded asset bundle hydrated
 //! from disk, an HTTP CDN. The trait uses [`async fn` in traits
 //! (AFIT)](https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits)
