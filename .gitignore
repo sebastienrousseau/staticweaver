@@ -1,11 +1,13 @@
 *.DS_Store
 *.profraw
 *.log
+/.claude/
 /.vscode/
 /output/
 /public/
 /target/
 build
+coverage.txt
 Icon?
 src/.DS_Store
 tarpaulin-report.html
