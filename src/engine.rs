@@ -874,6 +874,15 @@ impl Engine {
     /// let rendered = engine.render_page(&context, "index").unwrap();
     /// assert_eq!(rendered, "Hello, World!");
     /// ```
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            level = "debug",
+            name = "staticweaver.render_page",
+            skip(self, context),
+            fields(layout = %layout, context.len = context.len()),
+        )
+    )]
     pub fn render_page(
         &mut self,
         context: &Context,
@@ -958,6 +967,15 @@ impl Engine {
     /// ).unwrap();
     /// assert_eq!(out, "a b ");
     /// ```
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            level = "debug",
+            name = "staticweaver.render_template",
+            skip(self, context),
+            fields(template.bytes = template.len()),
+        )
+    )]
     pub fn render_template(
         &self,
         template: &str,
@@ -3604,6 +3622,54 @@ fn scan_existing_entity(bytes: &[u8], start: usize) -> Option<usize> {
         return Some(j + 1);
     }
     None
+}
+
+// ── Kani formal-verification harness (issue #43) ────────────────────
+//
+// Hidden behind `#[cfg(kani)]` — invisible to ordinary builds. Run with
+// `cargo kani` (after `cargo install --locked kani-verifier` and
+// `cargo kani-setup`). Verifies that `escape_html_into` is a fixed
+// point: feeding its own output back in produces byte-identical output.
+// This is the ssg#589 idempotency contract, hardened from
+// proptest-defended (random seeds) to formally proven over the
+// symbolic horizon Kani can solve in reasonable time.
+#[cfg(kani)]
+mod kani_proofs {
+    use super::escape_html_into;
+
+    /// `escape(escape(x)) == escape(x)` for any 4-byte input.
+    /// The 4-byte horizon is small enough that Kani's bit-blasting SAT
+    /// solver completes in seconds; large enough to cover every
+    /// combination of `<`, `>`, `&`, `"`, `'`, `;`, ASCII alnum, and
+    /// non-ASCII high bytes.
+    #[kani::proof]
+    #[kani::unwind(8)]
+    fn proof_escape_is_idempotent() {
+        let bytes: [u8; 4] = kani::any();
+        // Restrict to valid UTF-8 — that's what `&str` guarantees the
+        // engine sees.
+        if let Ok(s) = core::str::from_utf8(&bytes) {
+            let mut once = String::new();
+            escape_html_into(s, &mut once);
+            let mut twice = String::new();
+            escape_html_into(&once, &mut twice);
+            assert_eq!(once, twice);
+        }
+    }
+
+    /// Output never contains a bare `<` or `>` — both unconditionally
+    /// escape.
+    #[kani::proof]
+    #[kani::unwind(8)]
+    fn proof_no_bare_angle_brackets() {
+        let bytes: [u8; 4] = kani::any();
+        if let Ok(s) = core::str::from_utf8(&bytes) {
+            let mut out = String::new();
+            escape_html_into(s, &mut out);
+            assert!(!out.contains('<'));
+            assert!(!out.contains('>'));
+        }
+    }
 }
 
 #[cfg(test)]

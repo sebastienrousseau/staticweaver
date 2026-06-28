@@ -79,3 +79,85 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
         run: cargo publish
+
+  # SBOM generation + Sigstore keyless signing (issue #44). Runs after
+  # the publish succeeded, so the artifacts we sign match what crates.io
+  # actually serves. Outputs (CycloneDX JSON + SPDX JSON + .crate +
+  # .crate.sig + .crate.cert) attach to the GitHub Release.
+  sbom-and-sign:
+    name: SBOM + Sigstore
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: ${{ github.event_name == 'push' }}
+    permissions:
+      contents: write   # gh release upload
+      id-token: write   # cosign keyless OIDC against the Sigstore Fulcio CA
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Extract version from tag
+        id: ver
+        run: |
+          # github.ref_name is e.g. "v0.0.4" — strip the leading "v".
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install cargo-cyclonedx (CycloneDX SBOM)
+        run: cargo install --locked cargo-cyclonedx
+
+      - name: Install cargo-sbom (SPDX SBOM)
+        run: cargo install --locked cargo-sbom
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cargo cyclonedx --format json --override-filename bom
+          mv bom.json "staticweaver-${{ steps.ver.outputs.version }}.cdx.json"
+
+      - name: Generate SPDX SBOM
+        run: |
+          cargo sbom > "staticweaver-${{ steps.ver.outputs.version }}.spdx.json"
+
+      - name: cargo package (re-create the .crate we just published)
+        run: cargo package --no-verify
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign .crate via Sigstore (keyless OIDC)
+        run: |
+          set -euo pipefail
+          CRATE="target/package/staticweaver-${{ steps.ver.outputs.version }}.crate"
+          cosign sign-blob --yes \
+            --output-signature "${CRATE}.sig" \
+            --output-certificate "${CRATE}.cert" \
+            "${CRATE}"
+
+      - name: Attach SBOM + signature to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The Release may not exist yet (created post-publish by the
+          # maintainer's finalize-vX.Y.Z.sh). Wait briefly, otherwise
+          # create it ourselves so artifacts always have a home.
+          for i in 1 2 3 4 5; do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 6
+          done
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" \
+            "staticweaver-${{ steps.ver.outputs.version }}.cdx.json" \
+            "staticweaver-${{ steps.ver.outputs.version }}.spdx.json" \
+            "target/package/staticweaver-${{ steps.ver.outputs.version }}.crate" \
+            "target/package/staticweaver-${{ steps.ver.outputs.version }}.crate.sig" \
+            "target/package/staticweaver-${{ steps.ver.outputs.version }}.crate.cert" \
+            --clobber

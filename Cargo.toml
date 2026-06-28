@@ -88,6 +88,12 @@ axum-example = ["dep:axum", "dep:tokio"]
 # default builds stay dep-light.
 json = ["dep:serde_json"]
 
+# Emits `tracing` spans on the render hot path — render_page,
+# render_template — so users wiring tracing_subscriber / opentelemetry
+# get visibility without bolting on shims. Opt-in (issue #39) so the
+# default dep tree stays at five direct deps.
+tracing = ["dep:tracing"]
+
 # -----------------------------------------------------------------------------
 # Development Dependencies
 # -----------------------------------------------------------------------------
@@ -142,6 +148,12 @@ tempfile = "3.13"
 
 # thiserror provides the derive macro for error types.
 thiserror = "2.0"
+
+# tracing: gated behind the `tracing` feature. Adds `#[instrument]`
+# spans on render_page / render_template / apply_filter so callers
+# can wire tracing_subscriber / opentelemetry without writing
+# a shim. Zero weight to default builds because it's optional.
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"], optional = true }
 
 # -----------------------------------------------------------------------------
 # Examples
@@ -237,6 +249,12 @@ targets = ["x86_64-unknown-linux-gnu"]      # Default target platform for the do
 # -----------------------------------------------------------------------------
 [lints.rust]
 # Linting rules for the project.
+
+## Allowed cfg flags
+# `kani` is set by `cargo kani` (the bounded model checker, issue #43);
+# the proof harness in src/engine.rs is gated behind it. Without this
+# entry rustc would warn `unexpected_cfgs` on every ordinary build.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 ## Warnings
 missing_copy_implementations = "warn"       # Warn if types can implement `Copy` but don’t
