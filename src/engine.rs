@@ -2039,6 +2039,143 @@ impl Engine {
     }
 }
 
+// ── Async render surface (issue #37 + #38) ──────────────────────────
+//
+// Hidden behind `#[cfg(feature = "async")]` so default builds stay
+// sync-only. The render machinery itself is CPU-bound and remains
+// sync; the async surface only wraps the loader IO so callers in
+// async runtimes don't have to spawn_blocking just to fetch a
+// template body.
+
+#[cfg(feature = "async")]
+#[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+impl Engine {
+    /// Async counterpart to [`Engine::render_template`]: loads the
+    /// named template via `loader` (asynchronously), then renders
+    /// it synchronously against `context`. Issue #37.
+    ///
+    /// The render itself is CPU-bound and stays sync — the async-ness
+    /// comes from the loader IO. If you already have the template
+    /// body in memory, prefer `render_template` directly.
+    pub async fn render_template_async<L>(
+        &self,
+        loader: &L,
+        name: &str,
+        context: &Context,
+    ) -> Result<String, EngineError>
+    where
+        L: crate::loader_async::AsyncTemplateLoader,
+    {
+        let body = loader.load(name).await?;
+        self.render_template(&body, context)
+    }
+
+    /// Async counterpart to [`Engine::render_page`]: loads the layout
+    /// via `loader`, applies the per-extension auto-escape policy,
+    /// renders, and memoises the result in the same Mutex-protected
+    /// `render_cache` the sync path uses. Issue #37.
+    ///
+    /// Two concurrent async tasks calling this with the same key
+    /// race the insert harmlessly — both produce identical bytes
+    /// because the inputs are identical.
+    pub async fn render_page_async<L>(
+        &self,
+        loader: &L,
+        context: &Context,
+        layout: &str,
+    ) -> Result<String, EngineError>
+    where
+        L: crate::loader_async::AsyncTemplateLoader,
+    {
+        validate_path(layout)?;
+
+        let cache_key = format!("{}:{}", layout, context.hash());
+        if let Some(cached) = self
+            .render_cache
+            .lock()
+            .expect("cache poisoned")
+            .get(&cache_key)
+        {
+            return Ok(cached.to_string());
+        }
+
+        let template_content = loader.load(layout).await?;
+        let effective_escape = if self.autoescape_extensions.is_empty() {
+            self.escape_html
+        } else {
+            self.autoescape_extensions
+                .iter()
+                .any(|ext| layout.ends_with(ext.as_str()))
+        };
+
+        let mut output = String::with_capacity(template_content.len());
+        let _ = self.render_resolved(
+            &template_content,
+            &template_content,
+            context,
+            BlockOverrides::new(),
+            &mut output,
+            0,
+            effective_escape,
+        )?;
+
+        let _ = self
+            .render_cache
+            .lock()
+            .expect("cache poisoned")
+            .insert(cache_key, output.clone());
+
+        Ok(output)
+    }
+
+    /// Async streaming sink — issue #38. Mirror of
+    /// [`Engine::render_to`] for `AsyncWrite`-flavoured destinations
+    /// (`tokio::fs::File`, `tokio::net::TcpStream`, an Axum body
+    /// channel). The render itself stays sync; the bytes flush
+    /// through the async writer.
+    ///
+    /// Requires the `async-tokio` feature for the `AsyncWriteExt`
+    /// extension trait.
+    #[cfg(feature = "async-tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async-tokio")))]
+    pub async fn render_to_async<W>(
+        &self,
+        template: &str,
+        context: &Context,
+        writer: &mut W,
+    ) -> Result<(), EngineError>
+    where
+        W: tokio::io::AsyncWrite + Unpin + Send,
+    {
+        use tokio::io::AsyncWriteExt;
+        let body = self.render_template(template, context)?;
+        writer.write_all(body.as_bytes()).await?;
+        Ok(())
+    }
+
+    /// Page-flavoured async streaming sink — issue #38. Combines
+    /// async load + sync render + async write into one call. Errors
+    /// surface as `EngineError`.
+    #[cfg(feature = "async-tokio")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async-tokio")))]
+    pub async fn render_page_to_async<L, W>(
+        &self,
+        loader: &L,
+        context: &Context,
+        layout: &str,
+        writer: &mut W,
+    ) -> Result<(), EngineError>
+    where
+        L: crate::loader_async::AsyncTemplateLoader,
+        W: tokio::io::AsyncWrite + Unpin + Send,
+    {
+        use tokio::io::AsyncWriteExt;
+        let body = self.render_page_async(loader, context, layout).await?;
+        writer.write_all(body.as_bytes()).await?;
+        Ok(())
+    }
+}
+
 /// Utility function to check if a given path is a URL.
 ///
 /// # Arguments

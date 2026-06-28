@@ -8,7 +8,7 @@ name = "staticweaver"                       # The name of the library
 version = "0.0.4"                           # Current version of the crate (in-development)
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
-rust-version = "1.68"                       # MSRV (floor driven by thiserror 2.0 + regex 1.11 + serde_json 1.0)
+rust-version = "1.75"                       # MSRV — bumped in v0.0.4 for async fn in traits (AFIT), used by the optional `async` feature's `AsyncTemplateLoader` trait. Without `async`, 1.68 would still build.
 license = "MIT OR Apache-2.0"               # Dual licensing strategy
 description = """
 Small, safe, fast templating engine for Rust. Mustache-compatible \
@@ -94,6 +94,17 @@ json = ["dep:serde_json"]
 # default dep tree stays at five direct deps.
 tracing = ["dep:tracing"]
 
+# Async trait surface (issue #37). Exposes AsyncTemplateLoader and
+# Engine::{render_template_async, render_page_async, render_to_async}.
+# Uses async fn in traits (AFIT, stable since 1.75 — see MSRV bump).
+# Runtime-agnostic at this layer — bring your own executor.
+async = []
+
+# Default async impl: TokioFsLoader backed by tokio::fs (issue #37).
+# Implies `async`. Pulls in tokio with minimal features (rt-multi-thread
+# + fs); zero weight on default builds.
+async-tokio = ["async", "dep:tokio"]
+
 # -----------------------------------------------------------------------------
 # Development Dependencies
 # -----------------------------------------------------------------------------
@@ -132,11 +143,12 @@ fnv = "1.0"                                 # Fast non-cryptographic hash functi
 # its default build. rustls + native-roots avoids pulling OpenSSL.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "rustls-native-certs"], optional = true }
 
-# axum + tokio: only used by examples/axum.rs, gated behind the
-# `axum-example` feature. Adds zero weight to the default library
-# build because they're optional dependencies.
+# axum + tokio: used by examples/axum.rs (axum-example feature) AND
+# by the AsyncTemplateLoader TokioFsLoader impl (async-tokio feature).
+# tokio features below are the union — when only async-tokio is on, the
+# net/macros bits are dead code that LTO strips.
 axum = { version = "0.8", optional = true }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"], optional = true }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "fs"], optional = true }
 
 # serde_json: only used by the `json` filter, gated behind the
 # `json` feature. Default build has no JSON dep.
