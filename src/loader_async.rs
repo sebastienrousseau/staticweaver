@@ -76,12 +76,24 @@ use std::borrow::Cow;
 pub trait AsyncTemplateLoader: Send + Sync {
     /// Load the named template asynchronously.
     ///
+    /// `load` is invoked by `Engine::render_template_async` /
+    /// `render_page_async` rather than being called directly in normal use.
+    ///
     /// # Examples
     ///
     /// ```no_run
-    /// // See the trait-level example — `load` is invoked by
-    /// // `Engine::render_template_async` / `render_page_async`
-    /// // rather than being called directly in normal use.
+    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use staticweaver::{Context, Engine};
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let loader = MemoryAsyncLoader::new(HashMap::new());
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let ctx = Context::new();
+    /// // Internally calls loader.load("page").await; surface is async.
+    /// let _ = engine.render_template_async(&loader, "page", &ctx).await;
+    /// # Ok(()) }
     /// ```
     fn load(
         &self,
