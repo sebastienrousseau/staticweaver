@@ -428,15 +428,22 @@ pub struct Engine {
     pub template_path: String,
     /// Cache for rendered templates keyed by `"{layout}:{ctx.hash()}"`.
     ///
+    /// Wrapped in `Mutex` (issue #36, v0.0.4) so `Engine` is `Send + Sync`
+    /// and `render_page` can take `&self` — making the engine sharable
+    /// across threads / async tasks via `Arc<Engine>` without the
+    /// `Arc<Mutex<Engine>>` envelope users previously had to write.
+    /// The lock is held only across the cache lookup or insert; the
+    /// expensive render work happens outside it.
+    ///
     /// # Examples
     ///
     /// ```
     /// use staticweaver::Engine;
     /// use std::time::Duration;
     /// let engine = Engine::new("", Duration::from_secs(60));
-    /// assert_eq!(engine.render_cache.len(), 0);
+    /// assert_eq!(engine.render_cache.lock().unwrap().len(), 0);
     /// ```
-    pub render_cache: Cache<String, String>,
+    pub render_cache: std::sync::Mutex<Cache<String, String>>,
     /// Opening delimiter for template tags. Defaults to `"{{"`.
     ///
     /// # Examples
@@ -599,7 +606,7 @@ impl Engine {
     pub fn new(template_path: &str, cache_ttl: Duration) -> Self {
         Self {
             template_path: template_path.to_string(),
-            render_cache: Cache::new(cache_ttl),
+            render_cache: std::sync::Mutex::new(Cache::new(cache_ttl)),
             open_delim: "{{".to_string(),
             close_delim: "}}".to_string(),
             escape_html: true,
@@ -655,7 +662,7 @@ impl Engine {
     ) -> Self {
         Self {
             template_path: String::new(),
-            render_cache: Cache::new(cache_ttl),
+            render_cache: std::sync::Mutex::new(Cache::new(cache_ttl)),
             open_delim: "{{".to_string(),
             close_delim: "}}".to_string(),
             escape_html: true,
@@ -884,7 +891,7 @@ impl Engine {
         )
     )]
     pub fn render_page(
-        &mut self,
+        &self,
         context: &Context,
         layout: &str,
     ) -> Result<String, EngineError> {
@@ -894,8 +901,13 @@ impl Engine {
 
         let cache_key = format!("{}:{}", layout, context.hash());
 
-        // Return cached result if available
-        if let Some(cached) = self.render_cache.get(&cache_key) {
+        // Return cached result if available. The Mutex (issue #36)
+        // is held only across the lookup — the expensive render work
+        // below happens outside it, so concurrent render_page calls
+        // for *different* keys parallelise.
+        if let Some(cached) =
+            self.render_cache.lock().expect("cache poisoned").get(&cache_key)
+        {
             return Ok(cached.to_string());
         }
 
@@ -906,30 +918,43 @@ impl Engine {
         // Per-extension auto-escape policy: if the user opted in
         // via `autoescape_on(&[".html", …])`, the layout's own
         // extension decides whether substitutions get escaped, not
-        // the global `escape_html` flag. Save / restore the flag
-        // around the render so the engine state stays clean for
-        // subsequent calls (and so render_template — which has no
-        // layout name — continues to use the global setting).
-        let saved_escape = self.escape_html;
-        if !self.autoescape_extensions.is_empty() {
-            self.escape_html = self
-                .autoescape_extensions
+        // the global `escape_html` flag. The decision is computed
+        // here and passed all the way down through render_resolved /
+        // render_recursive — no mutation of `self.escape_html`
+        // (which would make render_page require `&mut self` and
+        // race across concurrent renders).
+        let effective_escape = if self.autoescape_extensions.is_empty() {
+            self.escape_html
+        } else {
+            self.autoescape_extensions
                 .iter()
-                .any(|ext| layout.ends_with(ext.as_str()));
-        }
+                .any(|ext| layout.ends_with(ext.as_str()))
+        };
 
         // Render the template with the provided context.
-        let rendered = self.render_template(&template_content, context);
+        let mut output = String::with_capacity(template_content.len());
+        let _ = self.render_resolved(
+            &template_content,
+            &template_content,
+            context,
+            BlockOverrides::new(),
+            &mut output,
+            0,
+            effective_escape,
+        )?;
 
-        // Restore the global flag before propagating the result so
-        // an error mid-render doesn't leak the override.
-        self.escape_html = saved_escape;
-        let rendered = rendered?;
+        // Cache the rendered result for future use. Lock-and-insert
+        // is a separate critical section from the lookup above — a
+        // concurrent insert for the same key races but is harmless
+        // (last-writer wins; both renders produce the same bytes
+        // because the inputs are identical).
+        let _ = self
+            .render_cache
+            .lock()
+            .expect("cache poisoned")
+            .insert(cache_key, output.clone());
 
-        // Cache the rendered result for future use
-        let _ = self.render_cache.insert(cache_key, rendered.clone());
-
-        Ok(rendered)
+        Ok(output)
     }
 
     /// Renders a raw template string against the provided `context`.
@@ -997,6 +1022,7 @@ impl Engine {
             BlockOverrides::new(),
             &mut output,
             0,
+            self.escape_html,
         )?;
         Ok(output)
     }
@@ -1068,7 +1094,7 @@ impl Engine {
     /// engine.render_page_to(&ctx, "index", &mut out).unwrap();
     /// ```
     pub fn render_page_to<W: Write>(
-        &mut self,
+        &self,
         context: &Context,
         layout: &str,
         writer: &mut W,
@@ -1093,6 +1119,7 @@ impl Engine {
         mut accumulated: BlockOverrides,
         output: &mut String,
         depth: usize,
+        escape_html: bool,
     ) -> Result<FlowSignal, EngineError> {
         if depth > MAX_RENDER_DEPTH {
             return Err(EngineError::Render(format!(
@@ -1119,6 +1146,7 @@ impl Engine {
                     accumulated,
                     output,
                     depth + 1,
+                    escape_html,
                 )
             }
             None => self.render_recursive(
@@ -1129,6 +1157,7 @@ impl Engine {
                 None,
                 output,
                 depth,
+                escape_html,
             ),
         }
     }
@@ -1156,6 +1185,7 @@ impl Engine {
         super_body: Option<&str>,
         output: &mut String,
         depth: usize,
+        escape_html: bool,
     ) -> Result<FlowSignal, EngineError> {
         if depth > MAX_RENDER_DEPTH {
             return Err(EngineError::Render(format!(
@@ -1285,6 +1315,7 @@ impl Engine {
                         super_body,
                         output,
                         depth + 1,
+                        escape_html,
                     )?;
                     // Propagate Break/Continue upward; the
                     // enclosing #each (if any) handles it.
@@ -1442,6 +1473,7 @@ impl Engine {
                         super_body,
                         output,
                         depth + 1,
+                        escape_html,
                     )?;
                     // `#each` is the loop-control sink:
                     //   * Break  -> stop iterating, render normally
@@ -1493,6 +1525,7 @@ impl Engine {
                         None,
                         output,
                         depth + 1,
+                        escape_html,
                     )?;
                     if signal != FlowSignal::Done {
                         return Ok(signal);
@@ -1564,6 +1597,7 @@ impl Engine {
                     super_for_body,
                     output,
                     depth + 1,
+                    escape_html,
                 )?;
                 if signal != FlowSignal::Done {
                     return Ok(signal);
@@ -1626,6 +1660,7 @@ impl Engine {
                     None,
                     output,
                     depth + 1,
+                    escape_html,
                 )?;
                 rest = after_tag;
                 continue;
@@ -1726,7 +1761,7 @@ impl Engine {
                 };
             }
 
-            if raw || marked_safe || !self.escape_html {
+            if raw || marked_safe || !escape_html {
                 output.push_str(&rendered);
             } else {
                 escape_html_into(&rendered, output);
@@ -1774,8 +1809,11 @@ impl Engine {
     /// let mut engine = Engine::new("t", Duration::from_secs(60));
     /// engine.set_max_cache_size(10);
     /// ```
-    pub fn set_max_cache_size(&mut self, size: usize) {
-        self.render_cache.set_capacity(size);
+    pub fn set_max_cache_size(&self, size: usize) {
+        self.render_cache
+            .lock()
+            .expect("cache poisoned")
+            .set_capacity(size);
     }
 
     /// Drops all entries from the internal rendering cache.
@@ -1789,8 +1827,8 @@ impl Engine {
     /// let mut engine = Engine::new("t", Duration::from_secs(60));
     /// engine.clear_cache();
     /// ```
-    pub fn clear_cache(&mut self) {
-        self.render_cache.clear();
+    pub fn clear_cache(&self) {
+        self.render_cache.lock().expect("cache poisoned").clear();
     }
 
     /// Prepares a local directory for template storage.
@@ -4315,7 +4353,7 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let layout = temp.path().join("hello.html");
         fs::write(&layout, "Hello, {{name}}!").unwrap();
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -4772,7 +4810,7 @@ mod tests {
              {{/each}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -4799,7 +4837,7 @@ mod tests {
             "child".to_string(),
             "{{#extends \"base\"}}{{#block \"x\"}}body{{/block}}{{ unclosed".to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -4934,7 +4972,7 @@ mod tests {
              {{/each}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5189,7 +5227,7 @@ mod tests {
             "page".to_string(),
             "{{#block bareword}}body{{/block}}".to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5496,7 +5534,7 @@ mod tests {
              {{#block \"body\"}}( {{ super() }} )-OVR{{/block}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5533,7 +5571,7 @@ mod tests {
         );
         let _ = store
             .insert("p".to_string(), "<{{ super() }}>".to_string());
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5560,7 +5598,7 @@ mod tests {
              {{#block \"hi\"}}>>> {{ super() }} <<<{{/block}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(store)),
             Duration::from_secs(60),
         );
@@ -5580,7 +5618,7 @@ mod tests {
             "greet".to_string(),
             "Hello, {{name}}!".to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(map)),
             Duration::from_secs(60),
         );
@@ -5600,7 +5638,7 @@ mod tests {
         );
         let _ =
             map.insert("inner".to_string(), "<{{name}}>".to_string());
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(map)),
             Duration::from_secs(60),
         );
@@ -5623,7 +5661,7 @@ mod tests {
             "{{#extends \"base\"}}{{#block \"body\"}}OVR{{/block}}"
                 .to_string(),
         );
-        let mut engine = Engine::with_loader(
+        let engine = Engine::with_loader(
             Arc::new(MemoryLoader::new(map)),
             Duration::from_secs(60),
         );
@@ -5638,7 +5676,7 @@ mod tests {
             Arc::new(MemoryLoader::default()),
             Duration::from_secs(60),
         );
-        let mut engine = engine;
+        let engine = engine;
         let ctx = Context::new();
         let err = engine.render_page(&ctx, "missing").unwrap_err();
         assert!(matches!(err, EngineError::Io(_)), "{err:?}");
@@ -5669,7 +5707,7 @@ mod tests {
         // still walks the filesystem.
         let temp = tempfile::TempDir::new().unwrap();
         fs::write(temp.path().join("p.html"), "default {{w}}").unwrap();
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -7725,7 +7763,7 @@ mod tests {
 
     #[test]
     fn test_render_page_rejects_path_traversal() {
-        let mut engine =
+        let engine =
             Engine::new("templates", Duration::from_secs(60));
         let context = Context::new();
         // `a/b` is now allowed; only `..`, absolute paths, and nulls
@@ -7750,7 +7788,7 @@ mod tests {
         let template_path = sub_dir.join("post.html");
         fs::write(&template_path, "Post: {{title}}").unwrap();
 
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp_dir.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -8058,7 +8096,7 @@ mod tests {
         let template_path = temp_dir.path().join("template.html");
         fs::write(&template_path, "Hello, {{name}}!").unwrap();
 
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp_dir.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -8071,48 +8109,55 @@ mod tests {
 
     #[test]
     fn test_clear_cache() {
-        let mut engine =
-            Engine::new("templates", Duration::from_secs(3600));
+        let engine = Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("key1".to_string(), "value1".to_string());
-        assert!(!engine.render_cache.is_empty());
+        assert!(!engine.render_cache.lock().unwrap().is_empty());
 
         engine.clear_cache();
-        assert!(engine.render_cache.is_empty());
+        assert!(engine.render_cache.lock().unwrap().is_empty());
     }
 
     #[test]
     fn test_set_max_cache_size() {
-        let mut engine =
-            Engine::new("templates", Duration::from_secs(3600));
+        let engine = Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("key1".to_string(), "value1".to_string());
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("key2".to_string(), "value2".to_string());
-        assert_eq!(engine.render_cache.len(), 2);
+        assert_eq!(engine.render_cache.lock().unwrap().len(), 2);
 
         // Capping at 1 doesn't wipe existing entries; subsequent inserts
         // evict the least-recently-used entry to stay within the cap.
         engine.set_max_cache_size(1);
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("key3".to_string(), "value3".to_string());
-        assert_eq!(engine.render_cache.len(), 1);
+        assert_eq!(engine.render_cache.lock().unwrap().len(), 1);
     }
 
     #[test]
     fn set_max_cache_size_noop_when_under_limit() {
-        let mut engine =
-            Engine::new("templates", Duration::from_secs(3600));
+        let engine = Engine::new("templates", Duration::from_secs(3600));
         let _ = engine
             .render_cache
+            .lock()
+            .unwrap()
             .insert("k".to_string(), "v".to_string());
         engine.set_max_cache_size(8);
         assert_eq!(
-            engine.render_cache.len(),
+            engine.render_cache.lock().unwrap().len(),
             1,
             "no-op branch must preserve cache when len() <= max_size"
         );
@@ -8127,7 +8172,7 @@ mod tests {
         let tpl = temp.path().join("page.html");
         fs::write(&tpl, "hi {{name}}").unwrap();
 
-        let mut engine = Engine::new(
+        let engine = Engine::new(
             temp.path().to_str().unwrap(),
             Duration::from_secs(60),
         );
@@ -8135,7 +8180,7 @@ mod tests {
         ctx.set("name".to_string(), "alice".to_string());
 
         let first = engine.render_page(&ctx, "page").unwrap();
-        assert_eq!(engine.render_cache.len(), 1);
+        assert_eq!(engine.render_cache.lock().unwrap().len(), 1);
 
         // Overwrite the template file; a cached render returns the old
         // output, proving the second call is served from cache rather

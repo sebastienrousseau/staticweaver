@@ -70,7 +70,7 @@ fn main() {
     support::task_with_output(
         "Render `post.html` (extends base, overrides title + body)",
         || {
-            let mut e = engine;
+            let e = engine;
             let out =
                 e.render_page(&ctx, "post.html").expect("render_page");
             out.lines().map(str::to_string).collect::<Vec<_>>()
