@@ -51,6 +51,67 @@ jobs:
       - name: Run tests
         run: cargo test --all-features
 
+  # Miri — undefined-behaviour interpreter (issue #42). Even with
+  # `#![forbid(unsafe_code)]` at the crate root, Miri catches UB
+  # introduced by derive-macro output (thiserror) and transitive deps
+  # (fnv, tempfile). Allowed-to-fail for v0.0.4; hard gate from v0.0.5.
+  miri:
+    name: Miri (nightly, --lib)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust nightly + Miri
+        run: |
+          rustup toolchain install nightly --component miri --profile minimal
+          rustup default nightly
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: cargo miri setup
+        run: cargo miri setup
+      - name: cargo miri test --lib
+        env:
+          # Skip Miri's strict isolation so filesystem-touching unit
+          # tests (FsLoader smoke tests) can read template fixtures.
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+        run: cargo miri test --lib --no-fail-fast
+
+  # OSV-Scanner — covers GHSA + RUSTSEC + crates.io advisories
+  # (issue #46). Complements the existing `Rust CI / Audit` (cargo-audit
+  # only sees RUSTSEC). Fails on CVSS >= 7.0.
+  osv-scanner:
+    name: OSV-Scanner
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v2.0.2
+        with:
+          scan-args: |-
+            --lockfile=./Cargo.lock
+            --format=table
+
+  # cargo-vet — supply-chain audit (issue #45). Covers the human-review
+  # side of supply chain (cargo-audit + osv-scanner cover the CVE side).
+  # Imports trusted audits from Mozilla, Google, bytecode-alliance,
+  # Embark. Remaining unaudited deps are exempted in
+  # supply-chain/config.toml. Adding a new dep that isn't covered by an
+  # import nor exempted fails this gate.
+  cargo-vet:
+    name: cargo-vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-vet
+        run: cargo install --locked cargo-vet
+      - name: cargo vet check
+        run: cargo vet check
+
   # Line-coverage floor. The reusable `rust-ci.yml` already reports to
   # Codecov; this job additionally enforces a hard gate inside the repo
   # so a coverage regression fails the PR directly, without waiting on
