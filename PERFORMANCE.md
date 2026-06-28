@@ -11,30 +11,56 @@ the engine caches at runtime.
 ## Headline numbers
 
 Full-quality `cargo bench --bench comparative` (Criterion, 2 s
-warm-up + 5 s measurement) on Apple M-series, after Phases D and H
-(latest measurement). Templates produce equivalent *output*; each
-engine uses its native syntax.
+warm-up + 5 s measurement) on Apple M-series, after Phases D and H.
+Templates produce equivalent *output*; each engine uses its native
+syntax.
 
 | Workload | staticweaver | Tera | Minijinja | Askama | vs Minijinja |
 | :--- | ---: | ---: | ---: | ---: | :--- |
 | `simple_sub` (1 tag) | **497 ns** | 388 ns | 591 ns | 95 ns | **+19%** (we win) |
 | `many_sub_32` (32 tags) | **12.85 µs** | 5.96 µs | 14.40 µs | 973 ns | **+11%** (we win) |
-| `escape_heavy` (10 KB body, 5% metachar) | **23.3 µs** | 77.8 µs | 24.3 µs | 23.2 µs | **+4%** (ties Askama too) |
+| `escape_heavy` (10 KB body, 5% metachar) | 26.2 µs† | 77.8 µs | 24.3 µs | 23.2 µs | −7.7% |
 | `each_100` (100 items) | 58.3 µs | 17.8 µs | 23.6 µs | 5.24 µs | −2.5× |
 | `each_1000` (1000 items) | 557 µs | 171 µs | 184 µs | 51.9 µs | −3.0× |
 | `if_chain` (nested conditionals) | 2.51 µs | 455 ns | 656 ns | 25.4 ns | −3.8× |
 | `filter_chain` (`trim \| upper`) | **1.03 µs** | 620 ns | 988 ns | 198 ns | **+5%** (we win) |
 
-**Wins or ties Minijinja on 4 / 7 workloads.** We **beat Tera on
-escape-heavy 3.3×** and **match Askama on the same workload**
-(23.3 µs vs 23.2 µs) — the SIMD escape path is fully competitive
-with Askama's compile-time codegen on long inputs.
+`simple_sub`, `many_sub_32`, `each_*`, `if_chain`, `filter_chain` measured
+2026-04 on Apple M-series, Rust stable. `escape_heavy` re-measured
+2026-06-27 on Apple M1 Pro, macOS 26.5.1, rustc 1.95.0
+(2026-04-14) — the value behind the † footnote — after the path
+rewrite described in the next section.
 
-The remaining 2.5–3.8× gap on loops and conditional chains is
-constant-factor per-tag overhead in the runtime AST walker; closing
-it would require a bytecode compiler. That was scoped as Phase D
-Option 1 and explicitly rejected to preserve the "small enough to
-read in an afternoon" pillar.
+**Wins or ties Minijinja on 4 / 7 workloads** and **beats Tera on
+escape-heavy 3.0×**. The remaining 2.5–3.8× gap on loops and
+conditional chains is constant-factor per-tag overhead in the
+runtime AST walker; closing it would require a bytecode compiler.
+That was scoped as Phase D Option 1 and explicitly rejected to
+preserve the "small enough to read in an afternoon" pillar.
+
+### † `escape_heavy` — about the path change
+
+v0.0.3 (this release) trades the old `askama_escape` SIMD path for
+an inline scalar entity-aware scanner. The change was forced by
+ssg#589: the SIMD path re-escaped already-formed entities
+(`&amp;` → `&amp;amp;`), breaking idempotency. The new path uses a
+byte-indexed fast scan with `matches!` over the OWASP 5-char set;
+safe runs flush via a single `push_str` (memcpy). Under
+`lto = true, opt-level = "z"` the loop autovectorises sufficiently
+to land at 26.2 µs — within ~12.5% of the dropped Askama parity
+(23.2 µs) while preserving the idempotency invariant that
+`escape(escape(x)) == escape(x)` (proptest-defended).
+
+| Path | `escape_heavy` (10 KB body, 5% metachar) |
+| :--- | ---: |
+| Pre-ssg#589 (v0.0.2, `askama_escape` SIMD) | 23.3 µs |
+| Post-ssg#589 scalar `char_indices` (pre-#33) | 78.3 µs (3.4× regression) |
+| **v0.0.3 inline byte-indexed fast path (#33)** | **26.2 µs** (within 12.5% of SIMD baseline) |
+
+A full SIMD recovery (custom AVX2/NEON `<>&"'` mask with entity
+lookahead) is scoped for v0.0.4 if benchmarks justify the
+complexity. The v0.0.3 scalar path is the right cost/benefit for a
+patch release: ~50 LOC, no new dependency, idempotency guaranteed.
 
 ## Phase D progression
 
@@ -48,6 +74,7 @@ The Phase D performance work, commit by commit:
 | **D4** | `set_value_str` — borrow key on update | each_1000 −12% (640µs → 563µs) |
 | **D6** | Allocation-free close-tag match in `extract_block` | if_chain −8% (2.6µs → 2.4µs) |
 | **D3** | Reuse `Value::String` buffer in `#each` (`set_value_string`) | each_100 −18% (67µs → 55µs) |
+| **#33 (v0.0.3)** | Inline byte-indexed escape fast path, post-`askama_escape` drop | escape_heavy −66.6% (78.3µs → 26.2µs) — recovers most of the D2 SIMD win while preserving ssg#589 idempotency |
 
 **Cumulative each_1000: 22.6 ms → 557 µs (~40× faster).** Numbers
 in the headline table above use the latest post-H measurement;
@@ -129,8 +156,11 @@ engine, and add the new function to the `criterion_group!` macro.
 
 Numbers above were measured on:
 
-* Apple M-series, macOS 25.4 (Darwin)
-* Rust stable (per `rust-toolchain.toml`)
+* Apple M-series (Phase D / H rows) and Apple M1 Pro (the v0.0.3
+  `escape_heavy` re-measurement)
+* macOS 25.4 (Phase D / H); macOS 26.5.1 (#33 re-measurement)
+* Rust stable per `rust-toolchain.toml`; #33 measured under rustc 1.95.0
+  (2026-04-14, aarch64-apple-darwin)
 * Release profile: `lto = true`, `codegen-units = 1`, `opt-level = "z"`
 
 Numbers will vary on other hardware. The *ratios* between engines

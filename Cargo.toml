@@ -5,7 +5,7 @@
 [package]
 # General project metadata
 name = "staticweaver"                       # The name of the library
-version = "0.0.2"                           # Current version of the crate
+version = "0.0.3"                           # Current version of the crate
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
 rust-version = "1.68"                       # MSRV (floor driven by thiserror 2.0 + regex 1.11 + serde_json 1.0)
@@ -13,8 +13,8 @@ license = "MIT OR Apache-2.0"               # Dual licensing strategy
 description = """
 Small, safe, fast templating engine for Rust. Mustache-compatible \
 syntax with Tera-style expressions, inheritance with super(), 23 \
-built-in filters, custom filters/tests, pluggable loaders, SIMD HTML \
-escape that matches Askama, line:col error messages, zero unsafe code.
+built-in filters, custom filters/tests, pluggable loaders, idempotent \
+HTML escape, line:col error messages, zero unsafe code.
 """                                         # Short library description
 homepage = "https://staticweaver.com/"             # Project's homepage URL
 documentation = "https://staticweaver.com/documentation/index.html" # Doc URL
@@ -106,7 +106,7 @@ mockito = "1"
 # to keep performance claims honest.
 tera = { version = "1", default-features = false }
 minijinja = "2"
-askama = "0.15"
+askama = "0.16"
 
 # proptest powers the random-template robustness suite in
 # tests/proptest_parser.rs — every parser code path must NEVER panic
@@ -120,13 +120,6 @@ proptest = "1"
 # Required dependencies for building and running the project.
 
 fnv = "1.0"                                 # Fast non-cryptographic hash function
-
-# askama_escape is the same SIMD HTML-entity encoder Askama uses for
-# its built-in auto-escape, with a 5-character set (& < > " ') matching
-# our pre-existing contract. Auto-vectorised inner loop on long strings
-# (~3-10x faster than a scalar byte scan). Used only by
-# `escape_html_into`.
-askama_escape = "0.10"
 
 # reqwest powers the optional remote-template fetcher. Gated behind the
 # `remote-templates` feature so the core crate has no networking code in
@@ -247,7 +240,7 @@ targets = ["x86_64-unknown-linux-gnu"]      # Default target platform for the do
 
 ## Warnings
 missing_copy_implementations = "warn"       # Warn if types can implement `Copy` but don’t
-missing_docs = "warn"                       # Warn if public items lack documentation
+missing_docs = "deny"                       # Deny missing docs — 100% doc coverage is a hard gate, not a CI-only check
 unstable_features = "warn"                  # Warn on the usage of unstable features
 unused_extern_crates = "warn"               # Warn about unused external crates
 unused_results = "warn"                     # Warn if a result type is unused (e.g., errors ignored)

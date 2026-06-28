@@ -542,6 +542,14 @@ pub struct Engine {
     /// assert_eq!(engine.autoescape_extensions, vec![".html"]);
     /// ```
     pub autoescape_extensions: Vec<String>,
+    /// When `true`, an unresolved `{{key}}` substitution emits an
+    /// empty string instead of aborting the render with
+    /// `EngineError::Render("Unresolved template tag: <key>")`.
+    /// Defaults to `false` (strict). Mirrors Jinja2's "undefined"
+    /// mode and lets sites whose page templates reference variables
+    /// that not every page supplies build without per-page shims.
+    /// Toggle via [`Engine::with_lax_undefined`]. Issue #28.
+    pub lax_undefined: bool,
 }
 
 // `Engine` is mostly auto-debuggable, but `custom_filters` carries
@@ -566,6 +574,7 @@ impl std::fmt::Debug for Engine {
             // dyn-trait field — Debug just shows the placeholder.
             .field("loader", &"<dyn TemplateLoader>")
             .field("autoescape_extensions", &self.autoescape_extensions)
+            .field("lax_undefined", &self.lax_undefined)
             .finish()
     }
 }
@@ -600,6 +609,7 @@ impl Engine {
                 template_path,
             ))),
             autoescape_extensions: Vec::new(),
+            lax_undefined: false,
         }
     }
 
@@ -653,6 +663,7 @@ impl Engine {
             custom_tests: HashMap::new(),
             loader,
             autoescape_extensions: Vec::new(),
+            lax_undefined: false,
         }
     }
 
@@ -796,6 +807,32 @@ impl Engine {
     #[must_use]
     pub fn with_html_escape(mut self, enable: bool) -> Self {
         self.escape_html = enable;
+        self
+    }
+
+    /// Sets whether unresolved `{{key}}` substitutions abort the
+    /// render (strict, default) or emit an empty string (lax).
+    ///
+    /// Lax mode mirrors Jinja2's "undefined" behaviour and lets
+    /// sites whose page templates reference variables that not every
+    /// page supplies build without per-page shims. Issue #28.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use staticweaver::{Context, Engine};
+    /// use std::time::Duration;
+    /// let mut engine = Engine::new("", Duration::from_secs(60))
+    ///     .with_lax_undefined(true);
+    /// let ctx = Context::new();
+    /// assert_eq!(
+    ///     engine.render_template("hello {{name}}", &ctx).unwrap(),
+    ///     "hello ",
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_lax_undefined(mut self, lax: bool) -> Self {
+        self.lax_undefined = lax;
         self
     }
 
@@ -1623,12 +1660,22 @@ impl Engine {
                 .filter(|(name, _)| !name.is_empty())
                 .collect();
 
-            let value = active.get_path(lookup).ok_or_else(|| {
-                EngineError::Render(format!(
-                    "Unresolved template tag: {lookup}{}",
-                    pos_suffix(origin, lookup)
-                ))
-            })?;
+            let value = match active.get_path(lookup) {
+                Some(v) => v,
+                None => {
+                    if self.lax_undefined {
+                        // Issue #28: emit nothing for unresolved tags.
+                        // Skip the filter chain — applying e.g. `| date`
+                        // to an empty value would error anyway.
+                        rest = after_tag;
+                        continue;
+                    }
+                    return Err(EngineError::Render(format!(
+                        "Unresolved template tag: {lookup}{}",
+                        pos_suffix(origin, lookup)
+                    )));
+                }
+            };
             let mut rendered = value.to_string();
 
             // A trailing `safe` filter marks the value as already-safe
@@ -3443,22 +3490,120 @@ fn split_else<'a>(
 /// named/numeric entities. Single-quote uses the numeric `&#x27;` form so
 /// the output stays valid inside both HTML and XML attributes.
 ///
-/// Byte-level scan: iterate over `s.as_bytes()`, flush clean runs via
-/// Append `s` to `out` with `& < > " '` substituted for their HTML
-/// entities. Same five-character set as Askama's `Html` escaper.
-/// Delegates to `askama_escape`, which auto-vectorises the inner loop
-/// with SIMD (SSE4.2 / AVX2 / NEON depending on target) for a ~3-10×
-/// speedup on long strings vs the scalar byte scan we used previously.
+/// Idempotent (ssg#589): already-formed entity references — `&name;`,
+/// `&#NN;`, `&#xNN;` — are preserved verbatim instead of getting their
+/// leading `&` re-escaped to `&amp;`. The lookup uses `scan_existing_entity`
+/// with a 32-byte cap (the longest HTML5 named ref,
+/// `CounterClockwiseContourIntegral`, is 31 chars).
 fn escape_html_into(s: &str, out: &mut String) {
-    use std::fmt::Write as _;
+    // Fast-path byte scan (issue #33): the OWASP 5 metacharacters
+    // (`<`, `>`, `&`, `"`, `'`) are all ASCII, so byte-indexed iteration
+    // is UTF-8-safe — every multi-byte sequence has leading byte ≥ 0x80
+    // and continuation bytes 0x80..=0xBF, none of which can match a
+    // metacharacter byte. Safe runs flush via a single `push_str`
+    // (memcpy) instead of char-by-char appends; the `matches!` arm
+    // autovectorises under `lto = true, opt-level = "z"` to within
+    // ~6× of the pre-ssg#589 `askama_escape` SIMD path while
+    // preserving entity-awareness.
     out.reserve(s.len());
-    // `write!` against `String` is infallible; the result is discarded
-    // explicitly to satisfy `unused_results`.
-    let _ = write!(
-        out,
-        "{}",
-        askama_escape::escape(s, askama_escape::Html)
-    );
+    let bytes = s.as_bytes();
+    let mut start: usize = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !matches!(b, b'<' | b'>' | b'&' | b'"' | b'\'') {
+            i += 1;
+            continue;
+        }
+        if start < i {
+            out.push_str(&s[start..i]);
+        }
+        match b {
+            b'&' => {
+                if let Some(end) = scan_existing_entity(bytes, i) {
+                    // Preserve an already-formed `&name;` / `&#NN;` /
+                    // `&#xNN;` verbatim — ssg#589 idempotency invariant.
+                    out.push_str(&s[i..end]);
+                    i = end;
+                } else {
+                    out.push_str("&amp;");
+                    i += 1;
+                }
+            }
+            b'<' => {
+                out.push_str("&lt;");
+                i += 1;
+            }
+            b'>' => {
+                out.push_str("&gt;");
+                i += 1;
+            }
+            b'"' => {
+                out.push_str("&quot;");
+                i += 1;
+            }
+            b'\'' => {
+                out.push_str("&#x27;");
+                i += 1;
+            }
+            _ => unreachable!(),
+        }
+        start = i;
+    }
+    if start < bytes.len() {
+        out.push_str(&s[start..]);
+    }
+}
+
+/// Returns `Some(end)` if `bytes[start..]` begins with a syntactically
+/// valid HTML entity reference (`&name;`, `&#NN;`, or `&#xNN;`),
+/// otherwise `None`. Caps the lookahead at 32 bytes — the longest
+/// HTML5 named character reference (`CounterClockwiseContourIntegral`)
+/// fits comfortably under that.
+fn scan_existing_entity(bytes: &[u8], start: usize) -> Option<usize> {
+    debug_assert_eq!(bytes[start], b'&');
+    let cap = bytes.len().min(start + 32);
+    let mut j = start + 1;
+    if j >= cap {
+        return None;
+    }
+    if bytes[j] == b'#' {
+        // Numeric: &#NN; or &#xNN; / &#XNN;.
+        j += 1;
+        if j >= cap {
+            return None;
+        }
+        let is_hex = bytes[j] == b'x' || bytes[j] == b'X';
+        if is_hex {
+            j += 1;
+        }
+        let digits_start = j;
+        while j < cap
+            && ((is_hex && bytes[j].is_ascii_hexdigit())
+                || (!is_hex && bytes[j].is_ascii_digit()))
+        {
+            j += 1;
+        }
+        if j == digits_start {
+            return None;
+        }
+        if j < cap && bytes[j] == b';' {
+            return Some(j + 1);
+        }
+        return None;
+    }
+    // Named: &name; where name is ASCII alphanumeric (a-z, A-Z, 0-9).
+    let name_start = j;
+    while j < cap && bytes[j].is_ascii_alphanumeric() {
+        j += 1;
+    }
+    if j == name_start {
+        return None;
+    }
+    if j < cap && bytes[j] == b';' {
+        return Some(j + 1);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -8005,5 +8150,78 @@ mod tests {
                 panic!("expected InvalidTemplate, got {other:?}")
             }
         }
+    }
+
+    #[test]
+    fn lax_mode_substitutes_empty_for_unresolved_tags() {
+        // Regression for sebastienrousseau/staticweaver#28.
+        // When lax_undefined is true, an undefined {{key}} emits "",
+        // letting the build proceed instead of aborting.
+        let engine = Engine::new("", Duration::from_secs(60))
+            .with_lax_undefined(true);
+        let ctx = Context::new();
+        let out = engine
+            .render_template("hello {{name}} world", &ctx)
+            .unwrap();
+        assert_eq!(out, "hello  world");
+    }
+
+    #[test]
+    fn strict_mode_still_errors_on_unresolved_tags() {
+        // Default is strict (lax_undefined = false). Pre-existing
+        // behaviour must not regress.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx = Context::new();
+        let err = engine.render_template("{{name}}", &ctx).unwrap_err();
+        assert!(
+            format!("{err}").contains("Unresolved template tag"),
+            "strict mode should still raise; got: {err}"
+        );
+    }
+
+    #[test]
+    fn escape_html_preserves_existing_named_entities() {
+        // Regression for sebastienrousseau/static-site-generator#589.
+        // `AI &amp; Payments` must stay `AI &amp; Payments`, not
+        // become `AI &amp;amp; Payments`.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "AI &amp; Payments".to_string());
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "AI &amp; Payments");
+    }
+
+    #[test]
+    fn escape_html_preserves_existing_numeric_entities() {
+        // Numeric entity refs (decimal AND hex) must be preserved.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "copy &#169; hex &#xA9;".to_string());
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "copy &#169; hex &#xA9;");
+    }
+
+    #[test]
+    fn escape_html_still_escapes_bare_ampersand_at_eof() {
+        // A bare `&` with no terminator must still escape — the
+        // entity scanner is allowed to bail and fall through.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), "AT&T R&D".to_string());
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "AT&amp;T R&amp;D");
+    }
+
+    #[test]
+    fn escape_html_handles_mixed_bare_and_escaped() {
+        // Mix: bare `&` → `&amp;`, already-escaped `&amp;` stays.
+        let engine = Engine::new("", Duration::from_secs(60));
+        let mut ctx = Context::new();
+        ctx.set(
+            "x".to_string(),
+            "AT&T owns &amp; and AT&amp;T too".to_string(),
+        );
+        let out = engine.render_template("{{x}}", &ctx).unwrap();
+        assert_eq!(out, "AT&amp;T owns &amp; and AT&amp;T too");
     }
 }

@@ -671,17 +671,31 @@ cargo test --test snapshots          # 16 golden-output regressions
 
 | Surface | Hosted at | Built by | Trigger |
 | :--- | :--- | :--- | :--- |
-| API reference | [docs.rs/staticweaver](https://docs.rs/staticweaver) | docs.rs | `crates.io` publish |
+| API reference (release) | [docs.rs/staticweaver](https://docs.rs/staticweaver) | docs.rs | `crates.io` publish |
+| API reference (tip-of-`main`) | [doc.staticweaver.com](https://doc.staticweaver.com/) | `.github/workflows/docs.yml` → GitHub Pages (Pages-via-Actions, no `gh-pages` branch) | every push to `main` |
 | README + crate-level prose | [docs.rs/staticweaver](https://docs.rs/staticweaver) (front page) | `#![doc = include_str!("../README.md")]` in `src/lib.rs` | every `cargo doc` |
 | CHANGELOG / SECURITY / FAQ | This GitHub repo | -- | every push |
 
-The CI `docs` job builds documentation under `RUSTDOCFLAGS="-D warnings -D rustdoc::broken_intra_doc_links"`, runs every doctest with `--all-features`, and enforces 100% example coverage. Publication itself is handled by docs.rs on every crates.io release — there is no `gh-pages` branch and no separate documentation workflow.
+Both the CI `Docs` job and the standalone `docs.yml` workflow build
+documentation under `RUSTDOCFLAGS="-D warnings -D rustdoc::broken_intra_doc_links -D rustdoc::private_intra_doc_links"`,
+run every doctest with `--all-features`, and enforce **100 % example coverage**.
+Missing-docs warnings are upgraded to **`deny`** at the crate level
+(`Cargo.toml [lints.rust]`), so any undocumented public item fails
+`cargo build` directly — not just CI.
+
+Publication targets:
+- **Release docs** are built by docs.rs on every `cargo publish`.
+- **Tip-of-`main` docs** are built by `.github/workflows/docs.yml` and
+  deployed via `actions/deploy-pages` (GH-Pages-via-Actions). No
+  `gh-pages` branch exists; the artifact is uploaded directly and the
+  custom-domain `CNAME` is written on every deploy.
 
 ### CI
 
 | Workflow | Trigger | Purpose |
 | :--- | :--- | :--- |
 | `ci.yml` | push, PR | Clippy, fmt, test (Linux + macOS + Windows), coverage gate (98%), `cargo deny`, via reusable pipelines |
+| `docs.yml` | push to `main` | Build rustdoc + publish to GitHub Pages at `doc.staticweaver.com` |
 | `release.yml` | tag `v*.*.*` | Validate matrix (macOS + Linux + Windows), build artifacts, GitHub Release, crates.io publish |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.

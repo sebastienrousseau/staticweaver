@@ -114,4 +114,78 @@ proptest! {
         let ctx = Context::new();
         let _ = e.render_template(&template, &ctx);
     }
+
+    // ── #31: HTML-escape idempotency invariant ──────────────────────
+    // Regression guard for sebastienrousseau/static-site-generator#589.
+    // The escape function must be a fixed point: feeding rendered
+    // output back through the engine as the value of `{{x}}` must
+    // produce byte-identical output. If a future refactor re-introduces
+    // double-encoding (`&amp;` → `&amp;amp;`), these properties fail
+    // on randomly generated inputs that include `&`, `<`, `>`, `"`, `'`.
+
+    /// Rendering `{{x}}` then feeding the output back in as `x`
+    /// must produce the same bytes. Covers the entity-preservation
+    /// branch (`&amp;`, `&#169;`, `&#xA9;` etc.).
+    #[test]
+    fn html_escape_is_idempotent(
+        s in "\\PC{0,500}",
+    ) {
+        let e = engine();
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), s);
+        let once = e.render_template("{{x}}", &ctx).expect("render");
+        let mut ctx2 = Context::new();
+        ctx2.set("x".to_string(), once.clone());
+        let twice = e.render_template("{{x}}", &ctx2).expect("re-render");
+        prop_assert_eq!(once, twice);
+    }
+
+    /// Rendered output of `{{x}}` over arbitrary input must never
+    /// contain a bare `<` or `>` — both must escape unconditionally.
+    /// The template literal itself has no metacharacters, so any
+    /// `<`/`>` in the output came from `x` and must have been escaped.
+    #[test]
+    fn html_escape_never_emits_bare_angle_brackets(
+        s in "\\PC{0,500}",
+    ) {
+        let e = engine();
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), s);
+        let out = e.render_template("{{x}}", &ctx).expect("render");
+        prop_assert!(!out.contains('<'), "bare `<` in output: {:?}", out);
+        prop_assert!(!out.contains('>'), "bare `>` in output: {:?}", out);
+    }
+
+    /// Every `&` in the output must begin a syntactically valid
+    /// entity reference (`&name;`, `&#NN;`, `&#xNN;`) within the
+    /// 32-byte cap enforced by `scan_existing_entity`. A bare `&`
+    /// is a regression.
+    #[test]
+    fn html_escape_every_ampersand_starts_a_valid_entity(
+        s in "\\PC{0,500}",
+    ) {
+        let e = engine();
+        let mut ctx = Context::new();
+        ctx.set("x".to_string(), s);
+        let out = e.render_template("{{x}}", &ctx).expect("render");
+        let bytes = out.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'&' {
+                let cap = bytes.len().min(i + 33);
+                let mut j = i + 1;
+                while j < cap && bytes[j] != b';' {
+                    j += 1;
+                }
+                prop_assert!(
+                    j < cap && bytes[j] == b';',
+                    "bare `&` (no terminator) at byte {} in {:?}",
+                    i, out,
+                );
+                i = j + 1;
+            } else {
+                i += 1;
+            }
+        }
+    }
 }
