@@ -10,6 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (pre-`1.0.0`, breaking changes may occur in minor/patch releases and are
 called out explicitly below).
 
+## [0.0.3] - 2026-06-27
+
+### Fixed
+- HTML-entity escape is now idempotent — `escape(escape(x)) == escape(x)`.
+  Closes sebastienrousseau/static-site-generator#589. Defended by three
+  new property tests (#31): idempotency, no bare angle brackets in output,
+  every `&` begins a valid entity reference.
+- `Context::hash()` is no longer collision-prone (#30). Keys are sorted
+  before being fed to the hasher; the previous XOR aggregation could
+  produce identical digests for distinct `(key, value)` sets, returning
+  a stale render from the `render_page` cache. The same fix is applied
+  inside `hash_value` for nested `Value::Map` entries.
+
+### Added
+- Opt-in lax mode for unresolved template tags (#28). Strict mode remains
+  the default; lax mode emits `""` for any unresolved `{{key}}` and skips
+  the attached filter chain. New `tests/lax_mode.rs` matrix locks the
+  wire format with 10 strict/lax/differential cases (#32).
+
+### Changed
+- HTML escape path rewritten as an inline byte-indexed scan with
+  `matches!` over the OWASP 5-char set and bulk-flush via `push_str`
+  (#33). Recovers from the 3.4× regression introduced by the
+  `askama_escape` removal: `escape_heavy` 78.3 µs → **26.2 µs**
+  (−66.6 %), within ~12.5 % of the pre-ssg#589 SIMD baseline (23.3 µs)
+  while preserving the idempotency invariant.
+- `PERFORMANCE.md` re-stamped (#34) with date / toolchain / CPU on every
+  measurement; new Phase-#33 row added to the progression table; the
+  `escape_heavy` claim re-labelled to reflect the scalar entity-aware
+  path.
+
+### Removed
+- Direct dependency on `askama_escape`. The new inline escape path is
+  hand-rolled — no new runtime dependency added. See PERFORMANCE.md
+  for measured impact.
+
 ## [0.0.2] - 2026-04-26
 
 The `v0.0.2` cycle moved staticweaver from a Mustache-tier substituter

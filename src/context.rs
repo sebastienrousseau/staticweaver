@@ -219,16 +219,17 @@ fn hash_value<H: Hasher>(v: &Value, h: &mut H) {
         }
         Value::Map(m) => {
             5u8.hash(h);
-            // XOR per-entry hashes — order-independent (FnvHashMap
-            // iteration order is unspecified).
-            let mut acc: u64 = 0;
-            for (k, val) in m {
-                let mut sub = DefaultHasher::new();
-                k.hash(&mut sub);
-                hash_value(val, &mut sub);
-                acc ^= sub.finish();
+            // Sort keys before feeding into the hasher: XOR aggregation
+            // is order-independent but collision-prone (issue #30).
+            // `FnvHashMap` iteration order is unspecified, so we must
+            // sort to keep the hash deterministic.
+            m.len().hash(h);
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort_unstable();
+            for k in keys {
+                k.hash(h);
+                hash_value(&m[k], h);
             }
-            acc.hash(h);
         }
     }
 }
@@ -295,9 +296,12 @@ impl Context {
         }
     }
 
-    /// Stable, iteration-order-independent hash of every entry. XOR
-    /// combines per-entry hashes so equal logical contexts always hash
-    /// equal — the `render_page` cache relies on this.
+    /// Stable, iteration-order-independent hash of every entry.
+    ///
+    /// Keys are sorted before being fed to the hasher (issue #30). The
+    /// previous XOR aggregation was order-independent but collision-prone:
+    /// two distinct `(key, value)` sets could XOR to the same `u64`,
+    /// returning a stale render from the `render_page` cache.
     ///
     /// # Examples
     ///
@@ -311,14 +315,15 @@ impl Context {
     /// ```
     #[must_use]
     pub fn hash(&self) -> u64 {
-        let mut acc: u64 = 0;
-        for (key, value) in &self.elements {
-            let mut h = DefaultHasher::new();
-            key.hash(&mut h);
-            hash_value(value, &mut h);
-            acc ^= h.finish();
+        let mut h = DefaultHasher::new();
+        self.elements.len().hash(&mut h);
+        let mut keys: Vec<&String> = self.elements.keys().collect();
+        keys.sort_unstable();
+        for k in keys {
+            k.hash(&mut h);
+            hash_value(&self.elements[k], &mut h);
         }
-        acc
+        h.finish()
     }
 
     /// Sets a string-typed entry. Backwards-compatible with the pre-Value
@@ -1007,5 +1012,92 @@ mod tests {
         // splitn(2, '.') on empty string yields [""]
         // elements.get("") returns None.
         assert_eq!(ctx.get_path(""), None);
+    }
+
+    // ── #30: hash collision-resistance ──────────────────────────────
+
+    #[test]
+    fn hash_distinguishes_swapped_values() {
+        // The classic XOR-aggregation failure mode: swap two values
+        // between two keys. Sort-then-hash distinguishes the resulting
+        // contexts; XOR aggregation may not.
+        let mut a = Context::new();
+        a.set("k1".to_string(), "v1".to_string());
+        a.set("k2".to_string(), "v2".to_string());
+
+        let mut b = Context::new();
+        b.set("k1".to_string(), "v2".to_string());
+        b.set("k2".to_string(), "v1".to_string());
+
+        assert_ne!(a.hash(), b.hash());
+    }
+
+    #[test]
+    fn hash_is_insertion_order_independent() {
+        // Equal logical sets must hash equal regardless of insertion
+        // order — the `render_page` cache relies on this invariant.
+        let mut a = Context::new();
+        a.set("alpha".to_string(), "1".to_string());
+        a.set("beta".to_string(), "2".to_string());
+        a.set("gamma".to_string(), "3".to_string());
+
+        let mut b = Context::new();
+        b.set("gamma".to_string(), "3".to_string());
+        b.set("alpha".to_string(), "1".to_string());
+        b.set("beta".to_string(), "2".to_string());
+
+        assert_eq!(a.hash(), b.hash());
+    }
+
+    #[test]
+    fn hash_distinguishes_empty_from_single_entry() {
+        let empty = Context::new();
+        let mut one = Context::new();
+        one.set("k".to_string(), "v".to_string());
+        assert_ne!(empty.hash(), one.hash());
+    }
+
+    #[test]
+    fn hash_nested_map_is_order_independent() {
+        // Value::Map iteration order is unspecified (FnvHashMap).
+        // Sort-then-hash inside hash_value() keeps the digest stable
+        // for equal maps inserted in different orders.
+        let mut m1 = FnvHashMap::default();
+        let _ = m1.insert("a".to_string(), Value::Number(1));
+        let _ = m1.insert("b".to_string(), Value::Number(2));
+        let _ = m1.insert("c".to_string(), Value::Number(3));
+
+        let mut m2 = FnvHashMap::default();
+        let _ = m2.insert("c".to_string(), Value::Number(3));
+        let _ = m2.insert("a".to_string(), Value::Number(1));
+        let _ = m2.insert("b".to_string(), Value::Number(2));
+
+        let mut a = Context::new();
+        a.set_value("m".to_string(), Value::Map(m1));
+        let mut b = Context::new();
+        b.set_value("m".to_string(), Value::Map(m2));
+
+        assert_eq!(a.hash(), b.hash());
+    }
+
+    #[test]
+    fn hash_nested_map_distinguishes_swapped_values() {
+        // Same swap-pattern test as `hash_distinguishes_swapped_values`
+        // but inside a `Value::Map`, exercising the inner hash_value
+        // path.
+        let mut m1 = FnvHashMap::default();
+        let _ = m1.insert("k1".to_string(), Value::from("v1"));
+        let _ = m1.insert("k2".to_string(), Value::from("v2"));
+
+        let mut m2 = FnvHashMap::default();
+        let _ = m2.insert("k1".to_string(), Value::from("v2"));
+        let _ = m2.insert("k2".to_string(), Value::from("v1"));
+
+        let mut a = Context::new();
+        a.set_value("m".to_string(), Value::Map(m1));
+        let mut b = Context::new();
+        b.set_value("m".to_string(), Value::Map(m2));
+
+        assert_ne!(a.hash(), b.hash());
     }
 }

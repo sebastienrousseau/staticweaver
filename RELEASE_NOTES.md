@@ -1,3 +1,45 @@
+# v0.0.3 — 2026-06-27
+
+This release closes a downstream regression and a latent correctness bug
+in the render cache. No public-API breakage.
+
+## Highlights
+
+- **HTML escape is idempotent.** Templates that double-escape (e.g.
+  `{{ x | safe | escape }}` patterns or pre-escaped fixtures) now produce
+  byte-identical output regardless of how many escape passes ran. Unblocks
+  sebastienrousseau/static-site-generator#589.
+- **Context hash is collision-safe.** The cache key for `render_page` no
+  longer hashes via order-independent XOR. Sort-then-hash eliminates a
+  class of stale-render bugs that could surface under heavy contextual
+  re-keying.
+- **Lax mode** for unresolved tags (#28) — opt-in. Strict mode unchanged.
+
+## Performance — `escape_heavy`
+
+The `askama_escape` removal (committed at the head of `feat/v0.0.3`)
+traded the old SIMD escape path for a scalar entity-aware scanner that
+preserves the ssg#589 idempotency invariant. The cost was real:
+`escape_heavy` regressed from 23.3 µs → 78.3 µs (3.4×).
+
+v0.0.3 recovers most of it. The escape function is rewritten as an
+inline byte-indexed `matches!` scan over the OWASP 5-char set with
+bulk-flush via `push_str`; under `lto = true` the loop autovectorises
+sufficiently to land at **26.2 µs** — within ~12.5 % of the dropped
+SIMD baseline. No new runtime dependency was added.
+
+See [PERFORMANCE.md](PERFORMANCE.md) for the full table, the per-phase
+progression, and the toolchain / CPU stamp.
+
+## Upgrade
+
+```toml
+[dependencies]
+staticweaver = "0.0.3"
+```
+
+No code changes required.
+
 # `staticweaver` v0.0.2
 
 `v0.0.2` graduates `staticweaver` from a Mustache-tier substituter into a **full

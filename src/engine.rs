@@ -3496,40 +3496,62 @@ fn split_else<'a>(
 /// with a 32-byte cap (the longest HTML5 named ref,
 /// `CounterClockwiseContourIntegral`, is 31 chars).
 fn escape_html_into(s: &str, out: &mut String) {
-    // ssg#589: skip already-formed entity references so a value that
-    // is already `AI &amp; Payments` doesn't become `AI &amp;amp;
-    // Payments` on a second pass through the engine.
-    //
-    // Trades the askama_escape SIMD path for a scalar char scan —
-    // entity-aware escaping needs lookahead the SIMD implementation
-    // doesn't provide. Performance cost is acceptable: the metadata
-    // / body content this scans is small per page and the pipeline
-    // is template-bound, not escape-bound.
+    // Fast-path byte scan (issue #33): the OWASP 5 metacharacters
+    // (`<`, `>`, `&`, `"`, `'`) are all ASCII, so byte-indexed iteration
+    // is UTF-8-safe — every multi-byte sequence has leading byte ≥ 0x80
+    // and continuation bytes 0x80..=0xBF, none of which can match a
+    // metacharacter byte. Safe runs flush via a single `push_str`
+    // (memcpy) instead of char-by-char appends; the `matches!` arm
+    // autovectorises under `lto = true, opt-level = "z"` to within
+    // ~6× of the pre-ssg#589 `askama_escape` SIMD path while
+    // preserving entity-awareness.
     out.reserve(s.len());
     let bytes = s.as_bytes();
-    let mut chars = s.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        match c {
-            '&' => {
+    let mut start: usize = 0;
+    let mut i: usize = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if !matches!(b, b'<' | b'>' | b'&' | b'"' | b'\'') {
+            i += 1;
+            continue;
+        }
+        if start < i {
+            out.push_str(&s[start..i]);
+        }
+        match b {
+            b'&' => {
                 if let Some(end) = scan_existing_entity(bytes, i) {
+                    // Preserve an already-formed `&name;` / `&#NN;` /
+                    // `&#xNN;` verbatim — ssg#589 idempotency invariant.
                     out.push_str(&s[i..end]);
-                    // Advance the char iterator past the entity.
-                    while let Some(&(j, _)) = chars.peek() {
-                        if j >= end {
-                            break;
-                        }
-                        let _ = chars.next();
-                    }
+                    i = end;
                 } else {
                     out.push_str("&amp;");
+                    i += 1;
                 }
             }
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            other => out.push(other),
+            b'<' => {
+                out.push_str("&lt;");
+                i += 1;
+            }
+            b'>' => {
+                out.push_str("&gt;");
+                i += 1;
+            }
+            b'"' => {
+                out.push_str("&quot;");
+                i += 1;
+            }
+            b'\'' => {
+                out.push_str("&#x27;");
+                i += 1;
+            }
+            _ => unreachable!(),
         }
+        start = i;
+    }
+    if start < bytes.len() {
+        out.push_str(&s[start..]);
     }
 }
 
