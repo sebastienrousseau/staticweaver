@@ -7,7 +7,7 @@
 <h1 align="center">Static Weaver (staticweaver)</h1>
 
 <p align="center">
-  <strong>Tera-tier templating in bytes. Pure Rust. Zero unsafe code. SIMD HTML escape.</strong>
+  <strong>Tera-tier templating in bytes. Pure Rust. Zero <code>unsafe</code>. Idempotent HTML escape. <code>Send + Sync</code> engine with an optional async surface.</strong>
 </p>
 
 <p align="center">
@@ -48,16 +48,21 @@ staticweaver = "0.0.4"
 
 ### Optional features
 
+All optional integrations are off by default. Enable only what the application needs.
+
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.4", features = ["remote-templates", "json"] }
+staticweaver = { version = "0.0.4", features = ["async-tokio", "tracing", "json"] }
 ```
 
-| Feature | Adds |
-| :--- | :--- |
-| `remote-templates` | `Engine::create_template_folder(Some(url))` HTTP fetcher (`reqwest` + `rustls-native-certs`, no OpenSSL pull-in) |
-| `json` | `{{ value \| json \| safe }}` filter via `serde_json` |
-| `axum-example` | Pulls `axum + tokio` so `cargo run --example axum` compiles |
+| Feature | Pulls in | Adds |
+| :--- | :--- | :--- |
+| `async` | — | `AsyncTemplateLoader` trait (AFIT) + `Engine::render_{template,page,to,page_to}_async`. Runtime-agnostic. |
+| `async-tokio` | `tokio` (`rt-multi-thread`, `fs`) | `TokioFsLoader` non-blocking impl; `AsyncWrite` sinks. Implies `async`. |
+| `tracing` | `tracing` | `#[tracing::instrument]` spans on `render_template` / `render_page` (`staticweaver.render_template`, `staticweaver.render_page`). |
+| `json` | `serde_json` | `{{ value \| json \| safe }}` filter. |
+| `remote-templates` | `reqwest` (`rustls-native-certs`, no OpenSSL) | `Engine::create_template_folder(Some(url))` HTTP fetcher (10 s timeout, 1 MiB body cap, `Content-Type` validation). |
+| `axum-example` | `axum`, `tokio` | Compiles `examples/axum.rs`. |
 
 ### Build from source
 
@@ -67,7 +72,7 @@ cd staticweaver
 make          # check + clippy + test
 ```
 
-Requires **Rust 1.68.0+**. Tested on Linux, macOS, and Windows.
+**MSRV: Rust 1.75.0+** (raised in v0.0.4 for async fn in traits used by the optional `async` feature). Tested on Linux, macOS, and Windows.
 
 ---
 
@@ -103,22 +108,27 @@ assert_eq!(
 
 staticweaver is designed to be the **no-compromise** templating engine for Rust: small, safe, fast, and ergonomic — simultaneously. Most engines pick one (small but limited, or full-featured but heavy). staticweaver picks all four.
 
-- **Pure Rust** -- no C bindings, no FFI, no `unsafe` blocks
+- **Pure Rust** -- no C bindings, no FFI, no `unsafe` blocks (`#![forbid(unsafe_code)]`)
 - **Mustache-compatible substitution** -- `{{name}}` syntax with HTML-escape by default
+- **Idempotent HTML escape** -- `escape(escape(x)) == escape(x)`, proptest- and Kani-defended
 - **Tera-style expressions** -- comparisons, boolean ops, integer math, postfix tests
 - **Template inheritance** -- `{{#extends}}` + `{{#block}}` with `{{ super() }}`
 - **23 built-in filters** -- pipeline syntax `{{ x | trim | uppercase }}`
 - **Custom filters + tests** -- runtime extension via `Engine::add_filter` / `add_test`
 - **Pluggable loaders** -- `TemplateLoader` trait; built-in `FsLoader`, `MemoryLoader`
-- **SIMD HTML escape** -- via `askama_escape`, ties Askama on long strings
-- **LRU cache** -- TTL + true LRU eviction; deterministic cache keys
-- **Stream rendering** -- `render_to(template, ctx, &mut io::Write)` for HTTP body sinks
+- **`Send + Sync` engine** (v0.0.4) -- share one `Arc<Engine>` across threads / async tasks; render cache lives behind `std::sync::Mutex` internally
+- **Optional async surface** (v0.0.4) -- `AsyncTemplateLoader` trait + `Engine::render_{template,page,to,page_to}_async` methods under the `async-tokio` feature
+- **Optional `tracing` integration** (v0.0.4) -- `#[tracing::instrument]` spans on the render hot path
+- **LRU cache** -- TTL + true LRU eviction; deterministic, collision-safe cache keys
+- **Stream rendering** -- `render_to(template, ctx, &mut io::Write)` (sync) and `render_to_async` (async) for HTTP body sinks
 - **Line:column errors** -- every error carries `at line N, column M`
 - **CLI binary** -- `cargo install staticweaver` ships a shell-side renderer
 - **Property-based + differential testing** -- 1500 random inputs/run, byte-equality vs Minijinja
-- **5 runtime dependencies** -- `fnv`, `askama_escape`, `tempfile`, `thiserror` (`reqwest` is optional)
-- **460+ tests** -- unit, integration, doctest, snapshot, differential, proptest
-- **11 runnable examples** with animated spinner UI
+- **Coverage-guided fuzzing** -- three libfuzzer targets nightly (`parse`, `escape`, `dot_path`)
+- **Formal verification** -- Kani proofs of `html_escape` idempotency
+- **4 runtime dependencies** -- `fnv`, `tempfile`, `thiserror` (`reqwest`, `tokio`, `tracing`, `serde_json`, `axum` are all optional)
+- **610+ tests** -- unit, integration, doctest, snapshot, differential, proptest, concurrent, async
+- **12 runnable examples** with animated spinner UI (including `async_tokio` and `axum`)
 
 ---
 
@@ -129,8 +139,13 @@ staticweaver competes across four categories of Rust templating engines:
 | | staticweaver | Tera | Minijinja | Handlebars | Askama |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Pure Rust** | Yes | Yes | Yes | Yes | Yes |
-| **Zero `unsafe`** | Yes | No | No | No | No |
-| **MSRV** | 1.68 | newer | newer | newer | newer |
+| **Zero `unsafe`** (`#![forbid(unsafe_code)]`) | Yes | No | No | No | No |
+| **MSRV** | 1.75 | newer | newer | newer | newer |
+| **`Send + Sync` engine** | Yes (v0.0.4) | Partial | Partial | Partial | n/a |
+| **Async loader / streaming** | Yes (`async-tokio` feature) | No | No | No | No |
+| **Formal verification (Kani)** | Yes (escape idempotency) | No | No | No | No |
+| **Coverage-guided fuzz** | Yes (3 targets) | No | No | No | No |
+| **SBOM + Sigstore on release** | Yes | No | No | No | No |
 | **HTML-escape by default** | Yes | Yes | Yes | Yes | Yes |
 | **Compile-time codegen** | No | No | No | No | Yes |
 | **Runtime template loading** | Yes | Yes | Yes | Yes | No |
@@ -145,7 +160,7 @@ staticweaver competes across four categories of Rust templating engines:
 | **Range iteration (`1..N`)** | Yes | Yes | Yes | No | No |
 | **`#break` / `#continue`** | Yes | Yes | Yes | No | No |
 | **CLI binary** | Yes | No | Partial | No | No |
-| **SIMD HTML escape** | `askama_escape` | No | No | No | `askama_escape` |
+| **Idempotent HTML escape** | Yes (`escape(escape(x))==escape(x)`) | No | No | No | No |
 | **Differential vs Minijinja** | 9 tests | No | -- | No | No |
 | **Property-based fuzzing** | proptest | No | No | No | No |
 | **Async runtime required** | No | No | No | No | No |
@@ -163,19 +178,19 @@ Benchmarked on Apple M-series, Rust stable. All libraries compiled with `--relea
 | :--- | ---: | ---: | ---: | ---: |
 | `simple_sub` (1 tag) | **497 ns** | 388 ns | 591 ns | 95 ns |
 | `many_sub_32` (32 tags) | **12.85 µs** | 5.96 µs | 14.40 µs | 973 ns |
-| `escape_heavy` (10 KB body, 5% metachar) | **23.3 µs** | 77.8 µs | 24.3 µs | 23.2 µs |
+| `escape_heavy` (10 KB body, 5% metachar) | 26.2 µs† | 77.8 µs | 24.3 µs | 23.2 µs |
 | `each_100` | 58.3 µs | 17.8 µs | 23.6 µs | 5.24 µs |
 | `each_1000` | 557 µs | 171 µs | 184 µs | 51.9 µs |
 | `if_chain` (nested conditionals) | 2.51 µs | 455 ns | 656 ns | 25.4 ns |
 | `filter_chain` (`trim \| upper`) | **1.03 µs** | 620 ns | 988 ns | 198 ns |
 
-**Wins or ties Minijinja on 4/7 workloads.** Beats Tera 3.3× on `escape_heavy`. Matches Askama on `escape_heavy` (23.3 µs vs 23.2 µs) — SIMD escape closes the gap with compile-time codegen on long inputs.
+**Wins or ties Minijinja on 4/7 workloads.** Beats Tera 3.0× on `escape_heavy`. † `escape_heavy` re-measured in v0.0.3 after `askama_escape` was removed in service of the ssg#589 idempotency invariant: the scalar entity-aware fast path now lands within ~12.5 % of the dropped SIMD baseline (was 23.3 µs). See [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ### Internal regression guards
 
 | Bench | Time | Insight |
 | :--- | ---: | :--- |
-| `render_template_escape_heavy` | 22.8 µs | SIMD entity encoder via `askama_escape` |
+| `render_template_escape_heavy` | 26.2 µs | Inline byte-indexed entity-aware fast path (v0.0.3) |
 | `render_page_cache_hit` | 2.12 µs | Warmed-cache fast path |
 | `render_page_cache_miss` | 14.20 µs | Cold render + parse + load |
 | `render_inheritance_with_super` | 415 ns | 3-layout merge with `{{ super() }}` |
@@ -189,10 +204,10 @@ Benchmarked on Apple M-series, Rust stable. All libraries compiled with `--relea
 | Capability | Measured Impact |
 | :--- | :--- |
 | LRU cache hit vs miss | **6.7×** faster on a hit (2.12 µs vs 14.20 µs) |
-| SIMD HTML escape vs scalar byte-scan | **−34%** on escape_heavy (34.4 µs → 22.8 µs) |
+| Inline byte-indexed escape fast path (v0.0.3, #33) | **−66.6%** vs scalar `char_indices` after `askama_escape` removal (78.3 µs → 26.2 µs) |
 | `#each` clone hoisted out of loop body | **35×** on each_1000 (22.6 ms → 640 µs) |
 | `set_value_string` reuses heap buffer | **−18%** on each_100 |
-| `Context::hash` (XOR-combined, order-independent) | O(n), zero allocation |
+| `Context::hash` (sort-then-hash, order-independent, collision-safe in v0.0.3) | O(n log n), zero allocation in the hot path |
 
 Reproduce: `cargo bench --bench comparative` and `cargo bench --bench template_benchmark`. See [`PERFORMANCE.md`](PERFORMANCE.md) for the full Phase D progression.
 
@@ -200,13 +215,13 @@ Reproduce: `cargo bench --bench comparative` and `cargo bench --bench template_b
 
 | Metric | Value |
 | :--- | :--- |
-| **Source** | ~9.7k lines across 5 modules (engine, context, cache, error, lib) |
-| **Test suite** | 460+ tests + 100 doctests + 1500 random proptest cases / run |
-| **Coverage** | 99.16% line coverage / 100% rustdoc with examples |
-| **Examples** | 11 branded examples + Axum integration |
+| **Source** | ~10.7k lines across 6 modules (engine, context, cache, error, loader_async, lib) |
+| **Test suite** | 610+ tests + 101 doctests + 1500 random proptest cases / run + 3 libfuzzer targets + 2 Kani proofs |
+| **Coverage** | 98% line-coverage floor enforced in CI / 100% rustdoc with examples (compile-time-enforced via `missing_docs = "deny"`) |
+| **Examples** | 12 branded examples (`hello`, `context`, `cache`, `engine`, `errors`, `remote`, `inheritance`, `filters`, `loaders`, `control_flow`, `async_tokio`, `axum`) |
 | **Benchmarks** | 14 internal regression guards + 7-workload comparative matrix |
-| **Dependencies** | 4 runtime + 1 optional (`reqwest`) |
-| **MSRV** | Rust 1.68.0 |
+| **Dependencies** | 3 runtime (`fnv`, `tempfile`, `thiserror`) + 5 optional (`reqwest`, `serde_json`, `tokio`, `tracing`, `axum`) |
+| **MSRV** | Rust 1.75.0 |
 
 ---
 
@@ -261,9 +276,9 @@ A bare path like `{{#if user}}` keeps its truthiness semantics — it evaluates 
 
 | | |
 | :--- | :--- |
-| **Rendering** | `render_template(&str, &Context)` and `render_page(&Context, layout)` return `Result<String, EngineError>`; `render_to<W: io::Write>(template, ctx, &mut writer)` and `render_page_to<W: io::Write>(ctx, layout, &mut writer)` stream into any sink (HTTP body, file, channel). |
+| **Rendering** | `render_template(&self, &str, &Context)` and `render_page(&self, &Context, layout)` return `Result<String, EngineError>`; `render_to<W: io::Write>` and `render_page_to<W: io::Write>` stream into any sink (HTTP body, file, channel). All take `&self` (v0.0.4) so one `Arc<Engine>` is shareable across threads. Async mirrors (`render_template_async`, `render_page_async`, `render_to_async`, `render_page_to_async`) live under the `async-tokio` feature. |
 | **Context** | Polymorphic `Value` enum (`Null` / `Bool` / `Number` / `String` / `List` / `Map`). `set` / `get` for legacy strings; `set_value` / `set_value_str` / `set_value_string` / `get_value` for typed inserts (`Into<Value>` for `String`, `&str`, `bool`, `i32`, `i64`, `Vec<V>`); `get_path` for dot-notation walks (`user.email`, `items.0`). `iter`, `clear`, `with_capacity`, and a stable `hash()` for cache-key construction. |
-| **HTML escape** | SIMD entity encoding via `askama_escape` (5-character OWASP set: `& < > " '`). On by default. Per-tag opt-out: `{{!body}}` or trailing ` \| safe` filter. Global opt-out: `Engine::new(...).with_html_escape(false)`. Per-extension policy: `engine.autoescape_on(&[".html", ".xml"])`. |
+| **HTML escape** | Inline byte-indexed scan over the OWASP 5-character set (`& < > " '`) with bulk-flush via `push_str`. On by default. **Idempotent** (`escape(escape(x)) == escape(x)`) — proptest- and Kani-defended; already-formed entity references (`&amp;`, `&#169;`, `&#xA9;`, named refs up to 31 chars) are preserved. Per-tag opt-out: `{{!body}}` or trailing ` \| safe` filter. Global opt-out: `Engine::new(...).with_html_escape(false)`. Per-extension policy: `engine.autoescape_on(&[".html", ".xml"])`. |
 | **Control flow** | `{{#if EXPR}}…{{else}}…{{/if}}` and `{{#each list}}…{{/each}}` with `@index`, `@first`, `@last`, `@key` loop helpers, `Map` iteration, range form (`{{#each START..END}}`), and `{{#break}}` / `{{#continue}}` early-exit tags. |
 | **Expressions** | Recursive-descent parser inside `#if`: comparisons (`==` `!=` `<` `<=` `>` `>=`), boolean ops (`and` `or` `not`, short-circuiting), integer math (`+` `-` `*` `/`, checked arithmetic), string concat (`~`), postfix tests (`is defined`, `is empty`, `is none`, with `is not` negation; user-extensible via `Engine::add_test`). |
 | **Partials & inheritance** | `{{> name}}` partials with `{{> name k=v}}` parameters and a depth-10 recursion guard; `{{#extends "base"}}` + `{{#block "name"}}…{{/block}}` for multi-level inheritance (child wins on conflicts), with `{{ super() }}` to include the parent block body inside an override. |
@@ -272,12 +287,13 @@ A bare path like `{{#if user}}` keeps its truthiness semantics — it evaluates 
 | **Template loaders** | `TemplateLoader` trait with built-in `FsLoader` (default) and `MemoryLoader` (testing/embedded assets). Plug in your own backend via `Engine::with_loader(Arc::new(MyLoader), ttl)`. |
 | **In-template assignment** | `{{#set name = LITERAL}}` binds locally without leaking to the parent scope. |
 | **Delimiters** | `set_delimiters(open, close)` swaps `{{` / `}}` for any pair. Whitespace around keys is trimmed. Whitespace control via `{{- key -}}`. Backslash-escape via `\{{literal}}`. |
-| **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. **True LRU eviction** on overflow — `Cache::get` (now `&mut self`) bumps access recency. Methods: `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. |
+| **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. **True LRU eviction** on overflow — `Cache::get` (`&mut self`) bumps access recency. Methods: `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. **Observability**: `CacheStats { inserts, hits, misses, evictions, ttl_expired }` via `Cache::stats()` for cheap export to prometheus / metrics / opentelemetry without forcing a dep choice. On the `Engine` the cache lives behind `std::sync::Mutex` so `render_page` can take `&self`. |
 | **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-native-certs`. The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
 | **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). All user-facing messages carry `at line N, column M` for source positions. `TemplateError` with `#[from]` conversions for `io::Error` and `reqwest::Error`. |
 | **CLI** | `cargo install staticweaver` ships a `staticweaver` binary: `staticweaver render <template> [--set k=v ...] [--no-escape]`. Reads templates from a file path or stdin (`-`). |
-| **Robustness** | proptest harness (256 random cases × 6 properties = ~1500 inputs per `cargo test`) proving the engine never panics on arbitrary input. Differential tests against Minijinja anchor the shared-syntax contract. |
-| **`cargo deny`** | `advisories`, `bans`, `licenses`, `sources` all pass. Yanked crates denied. |
+| **Robustness** | proptest harness (256 random cases × 9 properties = ~2300 inputs per `cargo test`) proving the engine never panics on arbitrary input. Differential tests against Minijinja anchor the shared-syntax contract. Three nightly libfuzzer targets (`parse`, `escape`, `dot_path`) cover the bytes proptest misses. Two `#[cfg(kani)]` formal proofs against `escape_html_into` (idempotency + no bare metachars). |
+| **Supply chain** | `cargo deny` (advisories, bans, licenses, sources — yanked denied) + `cargo audit` (CVSS gate) + `osv-scanner` (GHSA + RUSTSEC + crates.io) + `cargo vet` (Mozilla / Google / bytecode-alliance / Embark imports). Release artifacts: CycloneDX + SPDX JSON SBOMs, cosign keyless OIDC signatures (Sigstore), all attached to the GitHub Release. |
+| **Observability** | `tracing` feature (opt-in) adds `#[tracing::instrument]` spans on `render_template` / `render_page` with template-length / layout / context.len fields. Wire to `tracing_subscriber`, `tracing-opentelemetry`, or any other consumer. |
 
 ---
 
@@ -564,6 +580,145 @@ The `json` filter walks the full `Value` tree and serialises via `serde_json`. M
 </details>
 
 <details>
+<summary><b>Concurrent rendering with <code>Arc&lt;Engine&gt;</code> (v0.0.4)</b></summary>
+
+`Engine` is `Send + Sync + Clone` as of v0.0.4. Share one across threads — the render cache lives behind `std::sync::Mutex` internally; the lock is held only across cache lookup / insert, so the expensive render work happens in parallel.
+
+```rust
+use staticweaver::engine::MemoryLoader;
+use staticweaver::{Context, Engine};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = HashMap::new();
+    let _ = store.insert("page".to_string(), "hi {{name}}".to_string());
+    let engine = Arc::new(Engine::with_loader(
+        Arc::new(MemoryLoader::new(store)),
+        Duration::from_secs(60),
+    ));
+
+    let mut handles = Vec::new();
+    for id in 0..4 {
+        let engine = Arc::clone(&engine);
+        handles.push(thread::spawn(move || {
+            let mut ctx = Context::new();
+            ctx.set("name".to_string(), format!("worker-{id}"));
+            // `&self` — no `Arc<Mutex<Engine>>` envelope required.
+            engine.render_page(&ctx, "page").unwrap()
+        }));
+    }
+    for h in handles {
+        println!("{}", h.join().unwrap());
+    }
+    Ok(())
+}
+```
+
+</details>
+
+<details>
+<summary><b>Async rendering with the <code>async-tokio</code> feature (v0.0.4)</b></summary>
+
+Requires `staticweaver = { version = "0.0.4", features = ["async-tokio"] }`.
+
+```rust,ignore
+use staticweaver::loader_async::MemoryAsyncLoader;
+use staticweaver::{Context, Engine};
+use std::collections::HashMap;
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Build an async-loader-backed engine.
+    let mut store = HashMap::new();
+    let _ = store
+        .insert("greeting".to_string(), "Hi, {{name}}!".to_string());
+    let loader = MemoryAsyncLoader::new(store);
+    let engine = Engine::new("", Duration::from_secs(60));
+
+    let mut ctx = Context::new();
+    ctx.set("name".to_string(), "Ada".to_string());
+
+    // Async load + sync render; cache shared with sync render_page.
+    let out = engine
+        .render_page_async(&loader, &ctx, "greeting")
+        .await?;
+    assert_eq!(out, "Hi, Ada!");
+
+    // Async streaming into any AsyncWrite sink (e.g. tokio::fs::File,
+    // Axum body channel, tokio::net::TcpStream).
+    let mut sink: Vec<u8> = Vec::new();
+    engine
+        .render_to_async("hello {{name}}", &ctx, &mut sink)
+        .await?;
+    assert_eq!(&sink, b"hello Ada");
+    Ok(())
+}
+```
+
+`TokioFsLoader::new(path)` provides a non-blocking filesystem loader. Implement `AsyncTemplateLoader` for KV stores, embedded asset bundles, HTTP CDNs — the trait uses async fn in traits (AFIT), MSRV 1.75.
+
+</details>
+
+<details>
+<summary><b><code>tracing</code> spans on the render hot path</b></summary>
+
+Requires `staticweaver = { version = "0.0.4", features = ["tracing"] }`.
+
+```rust,ignore
+use staticweaver::{Context, Engine};
+use std::time::Duration;
+use tracing_subscriber::fmt;
+
+fn main() {
+    // Initialise any tracing subscriber — fmt is the simplest.
+    fmt::init();
+
+    let engine = Engine::new("", Duration::from_secs(60));
+    let mut ctx = Context::new();
+    ctx.set("who".to_string(), "world".to_string());
+
+    // `staticweaver.render_template` span with template_len field
+    // appears in your subscriber output.
+    let _ = engine.render_template("hello {{who}}", &ctx).unwrap();
+}
+```
+
+Spans: `staticweaver.render_template` (fields: `template.bytes`) and `staticweaver.render_page` (fields: `layout`, `context.len`). Zero weight when the `tracing` feature is off.
+
+</details>
+
+<details>
+<summary><b>Cache stats for prometheus / metrics / opentelemetry (v0.0.4)</b></summary>
+
+```rust
+use staticweaver::cache::{Cache, CacheStats};
+use std::time::Duration;
+
+fn main() {
+    let mut cache: Cache<String, u32> = Cache::new(Duration::from_secs(60));
+    let _ = cache.insert("a".to_string(), 1);
+    let _ = cache.get(&"a".to_string());         // hit
+    let _ = cache.get(&"missing".to_string());   // miss
+
+    let s: CacheStats = cache.stats();
+    println!(
+        "inserts={} hits={} misses={} evictions={} ttl_expired={}",
+        s.inserts, s.hits, s.misses, s.evictions, s.ttl_expired,
+    );
+    assert_eq!(s.hits, 1);
+    assert_eq!(s.misses, 1);
+}
+```
+
+All counters are monotonically increasing `u64`s. Take two snapshots and subtract for per-window rates.
+
+</details>
+
+<details>
 <summary><b>CLI binary</b></summary>
 
 ```bash
@@ -639,6 +794,7 @@ All examples live in `examples/` and use the shared `support.rs` helper for the 
 | `loaders` | `FsLoader` (default), `MemoryLoader` (in-memory), and a custom hot-mutable `LiveLoader` implementing the `TemplateLoader` trait. |
 | `control_flow` | Expression language, `{{#each list}}`, `{{#each 1..N}}`, `{{#break}}`, `{{#continue}}`, `{{#set}}`. |
 | `remote` | (feature-gated) `create_template_folder(Some(url))` against a local mock server. Run with `cargo run --example remote --features remote-templates`. |
+| `async_tokio` | (feature-gated) **v0.0.4** Async render via Tokio: `MemoryAsyncLoader`, `render_template_async`, `render_page_async`, `render_to_async` (AsyncWrite sink), and `Arc<Engine>` fan-out across tokio tasks. Run with `cargo run --example async_tokio --features async-tokio`. |
 | `axum` | (feature-gated) End-to-end Axum web-server integration: render-to-`String`, render-to-`Vec<u8>` via `render_to`, per-request context. Run with `cargo run --example axum --features axum-example`. |
 
 ---
