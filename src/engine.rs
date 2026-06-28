@@ -2060,6 +2060,27 @@ impl Engine {
     /// The render itself is CPU-bound and stays sync — the async-ness
     /// comes from the loader IO. If you already have the template
     /// body in memory, prefer `render_template` directly.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires the `async-tokio` feature + a tokio runtime.
+    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use staticweaver::{Context, Engine};
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("hi".to_string(), "Hello {{name}}!".to_string());
+    /// let loader = MemoryAsyncLoader::new(store);
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("name".to_string(), "Ada".to_string());
+    /// let out = engine.render_template_async(&loader, "hi", &ctx).await?;
+    /// assert_eq!(out, "Hello Ada!");
+    /// # Ok(()) }
+    /// ```
     pub async fn render_template_async<L>(
         &self,
         loader: &L,
@@ -2081,6 +2102,27 @@ impl Engine {
     /// Two concurrent async tasks calling this with the same key
     /// race the insert harmlessly — both produce identical bytes
     /// because the inputs are identical.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires the `async-tokio` feature + a tokio runtime.
+    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use staticweaver::{Context, Engine};
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("page".to_string(), "v={{v}}".to_string());
+    /// let loader = MemoryAsyncLoader::new(store);
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("v".to_string(), "ok".to_string());
+    /// let out = engine.render_page_async(&loader, &ctx, "page").await?;
+    /// assert_eq!(out, "v=ok");
+    /// # Ok(()) }
+    /// ```
     pub async fn render_page_async<L>(
         &self,
         loader: &L,
@@ -2140,6 +2182,23 @@ impl Engine {
     ///
     /// Requires the `async-tokio` feature for the `AsyncWriteExt`
     /// extension trait.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires the `async-tokio` feature + a tokio runtime.
+    /// use staticweaver::{Context, Engine};
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("who".to_string(), "world".to_string());
+    /// let mut sink: Vec<u8> = Vec::new();
+    /// engine.render_to_async("hi {{who}}", &ctx, &mut sink).await?;
+    /// assert_eq!(&sink, b"hi world");
+    /// # Ok(()) }
+    /// ```
     #[cfg(feature = "async-tokio")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async-tokio")))]
     pub async fn render_to_async<W>(
@@ -2160,6 +2219,28 @@ impl Engine {
     /// Page-flavoured async streaming sink — issue #38. Combines
     /// async load + sync render + async write into one call. Errors
     /// surface as `EngineError`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // Requires the `async-tokio` feature + a tokio runtime.
+    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use staticweaver::{Context, Engine};
+    /// use std::collections::HashMap;
+    /// use std::time::Duration;
+    ///
+    /// # async fn run() -> Result<(), staticweaver::EngineError> {
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("p".to_string(), "[{{a}}]".to_string());
+    /// let loader = MemoryAsyncLoader::new(store);
+    /// let engine = Engine::new("", Duration::from_secs(60));
+    /// let mut ctx = Context::new();
+    /// ctx.set("a".to_string(), "ok".to_string());
+    /// let mut sink: Vec<u8> = Vec::new();
+    /// engine.render_page_to_async(&loader, &ctx, "p", &mut sink).await?;
+    /// assert_eq!(&sink, b"[ok]");
+    /// # Ok(()) }
+    /// ```
     #[cfg(feature = "async-tokio")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async-tokio")))]
     pub async fn render_page_to_async<L, W>(

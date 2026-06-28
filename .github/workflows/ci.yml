@@ -103,20 +103,23 @@ jobs:
   cargo-vet:
     name: cargo-vet
     runs-on: ubuntu-latest
-    # Soft gate for now (issue #45 initial cut). The remote audit
-    # imports (Mozilla hg, etc.) flake intermittently; promotion to
-    # hard gate is scheduled for v0.0.5 alongside the planned
-    # `cargo vet prune` pass that drops the imports that have proven
-    # least reliable.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-vet
         run: cargo install --locked cargo-vet
-      - name: cargo vet check
-        run: cargo vet check
+      - name: cargo vet check (soft gate for v0.0.4)
+        # The remote audit imports (Mozilla hg, etc.) flake
+        # intermittently — `cargo vet check` exits non-zero on any
+        # unreachable import. Soft-gated for v0.0.4 (always exits 0,
+        # warning surfaced in the Actions log); promotion to hard gate
+        # is scheduled for v0.0.5 alongside a `cargo vet prune` pass
+        # that drops the least-reliable imports.
+        run: |
+          if ! cargo vet check; then
+            echo "::warning::cargo vet check failed (soft-gated for v0.0.4 — see ci.yml comment)"
+          fi
 
   # Line-coverage floor. The reusable `rust-ci.yml` already reports to
   # Codecov; this job additionally enforces a hard gate inside the repo

@@ -24,7 +24,7 @@
 //! (AFIT)](https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits)
 //! so impls need MSRV ≥ 1.75 (this crate's MSRV).
 //!
-//! ```ignore
+//! ```no_run
 //! use staticweaver::loader_async::AsyncTemplateLoader;
 //! use std::borrow::Cow;
 //!
@@ -55,8 +55,34 @@ use std::borrow::Cow;
 /// `Send + Sync` bound: an `Engine` carrying an `AsyncTemplateLoader`
 /// must remain `Send + Sync` so callers can stash it in an
 /// `Arc<Engine>` shared across executor tasks.
+///
+/// # Examples
+///
+/// ```no_run
+/// // `ignore` because the surface needs the `async` feature; the
+/// // code below is a faithful sketch of a custom impl.
+/// use staticweaver::loader_async::AsyncTemplateLoader;
+/// use staticweaver::EngineError;
+/// use std::borrow::Cow;
+///
+/// struct EchoLoader;
+///
+/// impl AsyncTemplateLoader for EchoLoader {
+///     async fn load(&self, name: &str) -> Result<Cow<'_, str>, EngineError> {
+///         Ok(Cow::Owned(format!("loaded: {name}")))
+///     }
+/// }
+/// ```
 pub trait AsyncTemplateLoader: Send + Sync {
     /// Load the named template asynchronously.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// // See the trait-level example — `load` is invoked by
+    /// // `Engine::render_template_async` / `render_page_async`
+    /// // rather than being called directly in normal use.
+    /// ```
     fn load(
         &self,
         name: &str,
@@ -70,6 +96,15 @@ pub trait AsyncTemplateLoader: Send + Sync {
 ///
 /// Gated behind the `async-tokio` feature so callers using other
 /// async runtimes don't pull in tokio just for filesystem reads.
+///
+/// # Examples
+///
+/// ```no_run
+/// use staticweaver::loader_async::TokioFsLoader;
+///
+/// let loader = TokioFsLoader::new("templates");
+/// // Pair with Engine::render_page_async(&loader, &ctx, "layout").await.
+/// ```
 #[cfg(feature = "async-tokio")]
 #[derive(Debug, Clone)]
 pub struct TokioFsLoader {
@@ -81,6 +116,15 @@ impl TokioFsLoader {
     /// Create a TokioFsLoader rooted at `root`. Templates are resolved
     /// relative to this directory — `loader.load("blog/post")` opens
     /// `<root>/blog/post`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use staticweaver::loader_async::TokioFsLoader;
+    /// use std::path::PathBuf;
+    ///
+    /// let loader = TokioFsLoader::new(PathBuf::from("templates"));
+    /// ```
     #[must_use]
     pub fn new(root: impl Into<std::path::PathBuf>) -> Self {
         Self { root: root.into() }
@@ -107,6 +151,18 @@ impl AsyncTemplateLoader for TokioFsLoader {
 
 /// In-memory async loader. Useful for tests and for embedded use
 /// where the template bytes ship inside the binary.
+///
+/// # Examples
+///
+/// ```no_run
+/// use staticweaver::loader_async::MemoryAsyncLoader;
+/// use std::collections::HashMap;
+///
+/// let mut store = HashMap::new();
+/// let _ = store.insert("page".to_string(), "Hi {{name}}".to_string());
+/// let loader = MemoryAsyncLoader::new(store);
+/// // Pair with Engine::render_template_async(&loader, "page", &ctx).await.
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct MemoryAsyncLoader {
     store: std::collections::HashMap<String, String>,
@@ -114,6 +170,16 @@ pub struct MemoryAsyncLoader {
 
 impl MemoryAsyncLoader {
     /// Build a `MemoryAsyncLoader` from a `(name -> body)` map.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use std::collections::HashMap;
+    ///
+    /// let store: HashMap<String, String> = HashMap::new();
+    /// let loader = MemoryAsyncLoader::new(store);
+    /// ```
     #[must_use]
     pub fn new(
         store: std::collections::HashMap<String, String>,
