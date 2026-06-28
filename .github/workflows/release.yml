@@ -122,7 +122,13 @@ jobs:
           cargo sbom > "staticweaver-${{ steps.ver.outputs.version }}.spdx.json"
 
       - name: cargo package (re-create the .crate we just published)
-        run: cargo package --no-verify
+        # `--allow-dirty` because the previous steps drop the
+        # CycloneDX + SPDX SBOM JSONs into the repo root. Safe:
+        # `cargo package` only ingests git-tracked files, so the
+        # SBOMs sitting alongside cannot reach the .crate artifact.
+        # Without this flag v0.0.4's SBOM+Sigstore job failed even
+        # though Publish to crates.io had already succeeded.
+        run: cargo package --no-verify --allow-dirty
 
       - uses: sigstore/cosign-installer@v3
 
