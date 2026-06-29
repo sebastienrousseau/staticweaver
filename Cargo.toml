@@ -121,7 +121,7 @@ mockito = "1"
 # comparative` so they don't bloat ordinary test builds. All three are
 # runtime / compile-time templating engines we measure ourselves against
 # to keep performance claims honest.
-tera = { version = "1", default-features = false }
+tera = { version = "2", default-features = false }
 minijinja = "2"
 askama = "0.16"
 
