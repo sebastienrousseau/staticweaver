@@ -21,7 +21,7 @@ concurrency:
 jobs:
   ci:
     name: Rust CI
-    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@d9cb8b34257036b6ed44a0333d4093f447c1b8cc
+    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@d3d082405a06d3ec471e6f6b7a1bbc8f1137d386
     with:
       rust-version: 'stable'
       run-clippy: true
@@ -88,7 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Run OSV-Scanner
-        uses: google/osv-scanner-action/osv-scanner-action@v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@v2.5.0
         with:
           scan-args: |-
             --lockfile=./Cargo.lock
