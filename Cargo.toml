@@ -5,7 +5,7 @@
 [package]
 # General project metadata
 name = "staticweaver"                       # The name of the library
-version = "0.0.5"                           # Current version of the crate (in-development)
+version = "0.0.6"                           # Current version of the crate (in-development)
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
 rust-version = "1.75"                       # MSRV — bumped in v0.0.4 for async fn in traits (AFIT), used by the optional `async` feature's `AsyncTemplateLoader` trait. Without `async`, 1.68 would still build.
