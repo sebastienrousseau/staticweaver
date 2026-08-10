@@ -188,7 +188,27 @@ jobs:
           set -euo pipefail
           output="$(cargo +nightly rustdoc --lib --all-features -- \
             -Z unstable-options --show-coverage 2>&1 | tee /dev/stderr)"
+
+          # Nightlies from roughly 2026-08 write the coverage table to
+          # target/doc/<crate>.txt and print only "Generated output into
+          # ..." on stdout. Older ones print the table itself. Parsing
+          # stdout unconditionally silently yielded an empty total, and
+          # the gate then failed with "Example coverage is ;" while
+          # coverage was in fact 100% — a broken parse reported as a
+          # coverage regression. Prefer the file when one is named.
+          report="$(printf '%s\n' "$output" \
+            | sed -n 's/.*Generated output into "\(.*\)".*/\1/p' | tail -1)"
+          if [ -n "${report}" ] && [ -f "${report}" ]; then
+            echo "Reading coverage table from ${report}"
+            output="$(cat "${report}")"
+          fi
+
           total="$(printf '%s\n' "$output" | awk '/^\| Total/ {print $(NF-1)}')"
+          if [ -z "${total}" ]; then
+            echo "::error::Could not parse the example-coverage table."
+            echo "::error::This is a parse failure, not a coverage result."
+            exit 1
+          fi
           echo "Overall example coverage: ${total}"
           if [ "${total}" != "100.0%" ]; then
             echo "::error::Example coverage is ${total}; expected 100.0%"
