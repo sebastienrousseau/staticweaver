@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (pre-`1.0.0`, breaking changes may occur in minor/patch releases and are
 called out explicitly below).
 
+## [0.0.6] - 2026-08-10
+
+### Changed
+
+- Bumped `minijinja` 2.21.0 -> 2.23.0 (lockfile only; the manifest
+  declares `minijinja = "2"`).
+- Bumped `google/osv-scanner-action` v2.3.8 -> v2.5.0 and the shared
+  `pipelines` `rust-ci.yml` reference to `d3d0824`.
+
 ## [0.0.5] - 2026-07-24
 
 ## [0.0.4] - 2026-06-28
