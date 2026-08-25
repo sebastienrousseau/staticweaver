@@ -1,6 +1,8 @@
-# Release pipeline. Fires on annotated `v*.*.*` tags and delegates to the
-# reusable workflow in `sebastienrousseau/pipelines`, which handles build,
-# SBOM, checksums, GitHub Release creation, and `cargo publish`.
+# Release pipeline. Fires on annotated `v*.*.*` tags. Verification,
+# `cargo publish` and SBOM/Sigstore signing all run inline here -- the
+# publish was moved out of the `sebastienrousseau/pipelines` reusable
+# workflow (see the comment above the publish job) and this header had
+# not been updated to match.
 #
 # Before pushing a tag:
 #   1. Update the `version` field in Cargo.toml and land it on `main`.
@@ -72,12 +74,22 @@ jobs:
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry-run) }}
     permissions:
       contents: read
+      # Mints the OIDC identity token crates.io exchanges for a
+      # short-lived publish token. Without it the auth step fails.
+      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      # Trusted publishing: swaps this job's GitHub OIDC identity for a
+      # temporary crates.io token, revoked by the action's post step when
+      # the job ends. Needs a trusted publisher on crates.io for the
+      # staticweaver crate (repo + release.yml).
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
       - name: cargo publish
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish
 
   # SBOM generation + Sigstore keyless signing (issue #44). Runs after
