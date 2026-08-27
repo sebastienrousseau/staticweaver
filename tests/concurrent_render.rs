@@ -96,6 +96,12 @@ fn arc_engine_renders_identical_output_across_threads() {
 }
 
 #[test]
+// Kani substitutes its own `assert_eq!`, which discards the format
+// arguments. `id` is genuinely used below -- in the assertion message
+// -- so it is only unused when Kani rewrites the macro, and `-D
+// warnings` then fails the proof run on a warning that does not exist
+// in a normal build.
+#[cfg_attr(kani, allow(unused_variables))]
 fn arc_engine_renders_different_keys_in_parallel() {
     // Each thread renders with a distinct context — exercises the
     // cache-miss path concurrently. Per-thread output must match the
