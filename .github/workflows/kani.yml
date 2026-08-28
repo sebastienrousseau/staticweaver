@@ -41,4 +41,12 @@ jobs:
             --tests
 
       - name: Run Kani proofs
-        run: cargo kani
+        # Only the harness that converges. `proof_escape_is_idempotent`
+        # escapes twice -- the second pass takes the first pass's output
+        # as symbolic input -- and produced no verdict in 60 minutes at
+        # either a 3- or 2-byte input, against 13m22s for this one. It
+        # stays in the source, runnable by hand, and the property it
+        # covers is defended by the proptest equivalence checks in
+        # `escape_reference_equivalence` and by tests/differential.rs.
+        # See issue #74 for the full measurements.
+        run: cargo kani --harness proof_no_bare_angle_brackets
