@@ -40,5 +40,7 @@ jobs:
           args: |
             --tests
 
-      - name: Run Kani proofs
-        run: cargo kani
+      # The `Install Kani` action above already runs `cargo kani --tests`,
+      # which verifies every harness. A second invocation here just did
+      # the same work twice -- it is what made this job take 20 minutes
+      # instead of 10.
