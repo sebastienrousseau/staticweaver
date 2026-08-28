@@ -4025,19 +4025,17 @@ mod kani_proofs {
     /// `escape(escape(x)) == escape(x)` -- the ssg#589 idempotency
     /// contract.
     ///
-    /// **Not run by CI.** This harness does not converge. It escapes
-    /// twice, and the second pass takes the first pass's output as
-    /// symbolic input, so its width is `IDEMPOTENT_INPUT * MAX_GROWTH`
-    /// rather than `IDEMPOTENT_INPUT`: 18 bytes at a 3-byte input, 12
-    /// at 2. Neither produced a verdict in 60 minutes, against 13m22s
-    /// for the single-pass proof below. That is a structurally larger
-    /// problem, not a tuning gap (issue #74).
+    /// Narrower than the single-pass proof because this harness escapes
+    /// twice: the second pass takes the first pass's output as symbolic
+    /// input, so its width is `IDEMPOTENT_INPUT * MAX_GROWTH` rather
+    /// than `IDEMPOTENT_INPUT`. At 2 that second pass is 12 bytes wide.
     ///
-    /// It is kept because it is correct and runnable by hand --
-    /// `cargo kani --harness proof_escape_is_idempotent` -- and because
-    /// a future Kani or a reformulation may close it. Meanwhile the
-    /// property is defended by `escape_reference_equivalence`'s
-    /// proptests and by `tests/differential.rs`.
+    /// This harness is memory-hungry enough to be machine-dependent: it
+    /// verifies on a GitHub runner but produced no verdict in 60 minutes
+    /// on an 8 GB laptop, at either a 2- or 3-byte input. If it starts
+    /// timing out, that is the first thing to check -- and `cargo kani
+    /// --harness proof_no_bare_angle_brackets` still gives a fast signal
+    /// on the cheaper property (issue #74).
     #[kani::proof]
     // Sized to the widest loop that can actually run: the verification
     // scan over INPUT * MAX_GROWTH = 18 bytes. 32 was inherited from an
