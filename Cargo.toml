@@ -123,7 +123,7 @@ mockito = "1"
 # runtime / compile-time templating engines we measure ourselves against
 # to keep performance claims honest.
 tera = { version = "2", default-features = false }
-minijinja = "2"
+minijinja = "3"
 askama = "0.16"
 
 # proptest powers the random-template robustness suite in
