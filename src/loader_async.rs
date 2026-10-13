@@ -22,7 +22,7 @@
 //! you have — a remote KV store, an embedded asset bundle hydrated
 //! from disk, an HTTP CDN. The trait uses [`async fn` in traits
 //! (AFIT)](https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits)
-//! so impls need MSRV ≥ 1.75 (this crate's MSRV).
+//! so impls need Rust 1.75 or newer; the crate's 1.89 MSRV covers it.
 //!
 //! ```no_run
 //! use staticweaver::loader_async::AsyncTemplateLoader;

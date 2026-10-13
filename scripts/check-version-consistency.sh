@@ -56,3 +56,36 @@ EOM
 fi
 
 echo "OK: README and Cargo.toml both at $CARGO_VERSION (${#README_VERSIONS[@]} snippets verified)"
+
+# ---------------------------------------------------------------------------
+# The MSRV. `rust-version` in Cargo.toml is the floor; every README
+# statement of it must name the same one (1.89 and 1.89.0 are equal).
+# Each pattern must still match, so a reworded statement fails here
+# instead of silently dropping out of the check.
+# ---------------------------------------------------------------------------
+MSRV=$(grep -E '^rust-version = ' Cargo.toml | head -1 | cut -d '"' -f2)
+norm() { if [[ $1 =~ ^[0-9]+\.[0-9]+$ ]]; then echo "$1.0"; else echo "$1"; fi; }
+MSRV_PATTERNS=(
+  '\*\*MSRV: Rust [0-9]+\.[0-9]+(\.[0-9]+)?\+\*\*'
+  '\| \*\*MSRV\*\* \(declared .rust-version.\) \| [0-9]+\.[0-9]+(\.[0-9]+)? \|'
+  '\| \*\*MSRV\*\* \| Rust [0-9]+\.[0-9]+(\.[0-9]+)? \|'
+  'MSRV [0-9]+\.[0-9]+(\.[0-9]+)?, networking is opt-in'
+  '\*\*MSRV is [0-9]+\.[0-9]+(\.[0-9]+)?\*\*'
+)
+for p in "${MSRV_PATTERNS[@]}"; do
+  hit=$(grep -oE "$p" README.md | head -1 || true)
+  if [[ -z "$hit" ]]; then
+    echo "::error::README.md has no MSRV statement matching: $p"
+    FAIL=1
+    continue
+  fi
+  v=$(grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' <<<"$hit" | head -1)
+  if [[ "$(norm "$v")" != "$(norm "$MSRV")" ]]; then
+    echo "::error::README states MSRV $v ('$hit') but Cargo.toml rust-version is $MSRV"
+    FAIL=1
+  fi
+done
+if [[ $FAIL -eq 1 ]]; then
+  exit 1
+fi
+echo "OK: README MSRV statements match rust-version $MSRV (${#MSRV_PATTERNS[@]} checked)"

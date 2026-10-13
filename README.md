@@ -72,7 +72,7 @@ cd staticweaver
 make          # check + clippy + test
 ```
 
-**MSRV: Rust 1.75.0+** (raised in v0.0.4 for async fn in traits used by the optional `async` feature). Tested on Linux, macOS, and Windows.
+**MSRV: Rust 1.89.0+** (raised in v0.0.8 to share one floor with the maintainer's other Rust crates). Tested on Linux, macOS, and Windows.
 
 ---
 
@@ -140,7 +140,7 @@ staticweaver competes across four categories of Rust templating engines:
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Pure Rust** | Yes | Yes | Yes | Yes | Yes |
 | **Zero `unsafe`** (`#![forbid(unsafe_code)]`) | Yes | No | No | No | No |
-| **MSRV** | 1.75 | newer | newer | newer | newer |
+| **MSRV** (declared `rust-version`) | 1.89 | none declared (2.4.0) | 1.70 (3.0.0) | 1.85 (6.4.4) | 1.88 (0.16.1) |
 | **`Send + Sync` engine** | Yes (v0.0.4) | Partial | Partial | Partial | n/a |
 | **Async loader / streaming** | Yes (`async-tokio` feature) | No | No | No | No |
 | **Formal verification (Kani)** | Yes (escape idempotency) | No | No | No | No |
@@ -221,7 +221,7 @@ Reproduce: `cargo bench --bench comparative` and `cargo bench --bench template_b
 | **Examples** | 12 branded examples (`hello`, `context`, `cache`, `engine`, `errors`, `remote`, `inheritance`, `filters`, `loaders`, `control_flow`, `async_tokio`, `axum`) |
 | **Benchmarks** | 14 internal regression guards + 7-workload comparative matrix |
 | **Dependencies** | 3 runtime (`fnv`, `tempfile`, `thiserror`) + 5 optional (`reqwest`, `serde_json`, `tokio`, `tracing`, `axum`) |
-| **MSRV** | Rust 1.75.0 |
+| **MSRV** | Rust 1.89.0 |
 
 ---
 
@@ -894,7 +894,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 | Rich Jinja2 feature set (macros, custom filters w/ Tera args, i18n hooks) | **Tera** |
 | Bytecode VM and the absolute fastest runtime engine for complex templates | **Minijinja** |
 | Mustache compatibility for porting templates between languages | **Handlebars** or **staticweaver** |
-| **Small (`#![forbid(unsafe_code)]`), Tera-style expressions + inheritance with `super()`, SIMD HTML escape, MSRV 1.68, networking is opt-in** | **staticweaver** |
+| **Small (`#![forbid(unsafe_code)]`), Tera-style expressions + inheritance with `super()`, SIMD HTML escape, MSRV 1.89, networking is opt-in** | **staticweaver** |
 
 The realistic differentiator: staticweaver is the only Rust template engine that combines `#![forbid(unsafe_code)]` with full inheritance + `super()`, range iteration, custom filters/tests, pluggable loaders, and SIMD escape — and stays small enough (~5k LoC engine) to read in an afternoon.
 
@@ -1077,7 +1077,7 @@ echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
 <details>
 <summary><b>What's the MSRV and what controls it?</b></summary>
 
-**MSRV is 1.68.** The floor is set by `thiserror 2.0`, `regex 1.12`, and `serde_json 1.0.149` — not by anything we use directly. Bumping MSRV is a breaking change, so we only do it when an upstream dep forces our hand.
+**MSRV is 1.89**, declared as `rust-version` in `Cargo.toml`. It is one floor shared with the maintainer's other Rust crates; the code itself needs 1.75 for the optional `async` feature. Bumping MSRV is a breaking change and is called out in the changelog.
 
 Stable Rust only — we don't use any nightly features.
 
