@@ -5,7 +5,7 @@
 [package]
 # General project metadata
 name = "staticweaver"                       # The name of the library
-version = "0.0.6"                           # Current version of the crate (in-development)
+version = "0.0.8"                           # Current version of the crate (in-development)
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
 rust-version = "1.89"                       # MSRV: one floor shared with the maintainer's other Rust crates (raised from 1.75 in v0.0.8). The optional `async` feature's AFIT `AsyncTemplateLoader` alone needs 1.75.
