@@ -21,7 +21,7 @@ concurrency:
 jobs:
   ci:
     name: Rust CI
-    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@41d9a0d3043c8a289cc06ac3a84e0ac1b1814b71
+    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@980375f1d96368885ff65cc4c7f1ff355a5a4095 # main 2026-10-13
     with:
       rust-version: 'stable'
       run-clippy: true
@@ -39,11 +39,18 @@ jobs:
     name: Test (nightly)
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      # rust-toolchain.toml pins `stable`, and rustup prefers that file
+      # over the toolchain installed below, so without this the job
+      # ran on stable.
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v7
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
+      - name: The nightly toolchain is the one in use
+        run: rustc --version | grep -F -- '-nightly'
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -88,7 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Run OSV-Scanner
-        uses: google/osv-scanner-action/osv-scanner-action@v2.5.1
+        uses: google/osv-scanner-action/osv-scanner-action@v2.6.0
         with:
           scan-args: |-
             --lockfile=./Cargo.lock
@@ -214,3 +221,16 @@ jobs:
             echo "::error::Example coverage is ${total}; expected 100.0%"
             exit 1
           fi
+
+  # Every version-bearing file must name Cargo.toml's version, so a tag
+  # can never again ship with the previous one (see the script).
+  release-preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: ./scripts/release-preflight.sh

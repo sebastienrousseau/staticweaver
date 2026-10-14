@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (pre-`1.0.0`, breaking changes may occur in minor/patch releases and are
 called out explicitly below).
 
+## [0.0.8] - Unreleased
+
+### Security
+
+- **quinn-proto 0.11.18** for RUSTSEC-2026-0338, -0340 and -0343
+  (remote-triggerable panics). The crate sits in `Cargo.lock` as part of
+  reqwest's optional HTTP/3 stack and no staticweaver feature builds it,
+  but `cargo audit` failed on the lockfile.
+
+### Dependencies
+
+- minijinja 3.0.0 (benchmark comparison), the minor-and-patch group and
+  two GitHub Actions updates, from Dependabot.
+
+### Changed
+
+- **Breaking: the MSRV is now Rust 1.89** (was 1.75), one floor shared
+  with the maintainer's other Rust crates. The README had also said 1.68
+  in two places; every statement now says 1.89, and the comparison table
+  lists each engine's declared `rust-version` instead of "newer".
+- **`scripts/check-version-consistency.sh` checks the MSRV.** The five
+  README statements of the floor must match `rust-version`.
+- Padding uses `iter::repeat_n` (1.82), as clippy asks once the floor
+  allows it.
+
 ## [0.0.6] - 2026-08-10
 
 ### Changed

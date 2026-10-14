@@ -5,10 +5,10 @@
 [package]
 # General project metadata
 name = "staticweaver"                       # The name of the library
-version = "0.0.6"                           # Current version of the crate (in-development)
+version = "0.0.8"                           # Current version of the crate (in-development)
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
-rust-version = "1.75"                       # MSRV — bumped in v0.0.4 for async fn in traits (AFIT), used by the optional `async` feature's `AsyncTemplateLoader` trait. Without `async`, 1.68 would still build.
+rust-version = "1.89"                       # MSRV: one floor shared with the maintainer's other Rust crates (raised from 1.75 in v0.0.8). The optional `async` feature's AFIT `AsyncTemplateLoader` alone needs 1.75.
 license = "MIT OR Apache-2.0"               # Dual licensing strategy
 description = """
 Small, safe, fast templating engine for Rust. Mustache-compatible \
@@ -123,7 +123,7 @@ mockito = "1"
 # runtime / compile-time templating engines we measure ourselves against
 # to keep performance claims honest.
 tera = { version = "2", default-features = false }
-minijinja = "2"
+minijinja = "3"
 askama = "0.16"
 
 # proptest powers the random-template robustness suite in
