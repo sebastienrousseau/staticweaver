@@ -35,6 +35,12 @@ jobs:
 
       - name: Install Kani
         uses: model-checking/kani-github-action@v1
+        # Kani injects `#[macro_use] extern crate kani;` and its own
+        # `assert!`, which end in a semicolon; Cargo.toml's
+        # `macro_use_extern_crate = "deny"` and `future_incompatible`
+        # reject both, so the proofs never compiled. Allowed for this job only.
+        env:
+          RUSTFLAGS: -A macro-use-extern-crate -A semicolon-in-expressions-from-non-local-macros
         with:
           enable-propproof: false
           args: |
