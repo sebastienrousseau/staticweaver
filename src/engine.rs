@@ -2681,8 +2681,7 @@ fn pad(
         return Ok(s.to_string());
     }
     let needed = width - len;
-    let pad: String =
-        std::iter::repeat(pad_char).take(needed).collect();
+    let pad: String = std::iter::repeat_n(pad_char, needed).collect();
     Ok(if left {
         format!("{pad}{s}")
     } else {

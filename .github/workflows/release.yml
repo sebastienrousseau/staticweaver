@@ -49,6 +49,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+      - name: Release preflight
+        # The tag must match Cargo.toml and every version-bearing file.
+        run: ./scripts/release-preflight.sh "${GITHUB_REF_NAME}"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
