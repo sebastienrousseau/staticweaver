@@ -30,7 +30,10 @@ version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' Cargo.toml | head -1)
 
 # The workspace's own packages: every manifest that declares a version
 # or inherits the workspace one.
-mapfile -t names < <(git ls-files '*Cargo.toml' | grep -v '^fuzz/' | while read -r m; do
+names=()
+while IFS= read -r n; do
+  [ -n "$n" ] && names+=("$n")
+done < <(git ls-files '*Cargo.toml' | grep -v '^fuzz/' | while read -r m; do
   awk '/^\[package\]/{p=1; next} /^\[/{p=0} p && /^name *=/{gsub(/[" ]/,""); sub(/^name=/,""); print; exit}' "$m"
 done | sort -u)
 
