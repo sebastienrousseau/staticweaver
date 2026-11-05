@@ -1909,6 +1909,7 @@ impl Engine {
                             .to_string(),
                     ));
                 }
+                crate::transport::require_permitted(path)?;
                 let dir = Self::download_files_from_url(path, files)?;
                 return dir.to_str().map(str::to_string).ok_or_else(
                     || {
@@ -1986,7 +1987,9 @@ impl Engine {
         let file_url = format!("{url}/{file}");
         let file_path = dir.join(file);
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::blocking::Client::builder()
+            .redirect(crate::transport::redirect_policy())
+            .build()?;
         let response = client
             .get(&file_url)
             .timeout(Duration::from_secs(10))

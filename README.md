@@ -61,7 +61,7 @@ staticweaver = { version = "0.0.8", features = ["async-tokio", "tracing", "json"
 | `async-tokio` | `tokio` (`rt-multi-thread`, `fs`) | `TokioFsLoader` non-blocking impl; `AsyncWrite` sinks. Implies `async`. |
 | `tracing` | `tracing` | `#[tracing::instrument]` spans on `render_template` / `render_page` (`staticweaver.render_template`, `staticweaver.render_page`). |
 | `json` | `serde_json` | `{{ value \| json \| safe }}` filter. |
-| `remote-templates` | `reqwest` (`rustls-native-certs`, no OpenSSL) | `Engine::create_template_folder(Some(url))` HTTP fetcher (10 s timeout, 1 MiB body cap, `Content-Type` validation). |
+| `remote-templates` | `reqwest` (`rustls-native-certs`, no OpenSSL) | `Engine::create_template_folder(Some(url))` HTTPS fetcher (loopback may use HTTP; 10 s timeout, 1 MiB body cap, `Content-Type` validation). |
 | `axum-example` | `axum`, `tokio` | Compiles `examples/axum.rs`. |
 
 ### Build from source
@@ -288,7 +288,7 @@ A bare path like `{{#if user}}` keeps its truthiness semantics — it evaluates 
 | **In-template assignment** | `{{#set name = LITERAL}}` binds locally without leaking to the parent scope. |
 | **Delimiters** | `set_delimiters(open, close)` swaps `{{` / `}}` for any pair. Whitespace around keys is trimmed. Whitespace control via `{{- key -}}`. Backslash-escape via `\{{literal}}`. |
 | **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. **True LRU eviction** on overflow — `Cache::get` (`&mut self`) bumps access recency. Methods: `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. **Observability**: `CacheStats { inserts, hits, misses, evictions, ttl_expired }` via `Cache::stats()` for cheap export to prometheus / metrics / opentelemetry without forcing a dep choice. On the `Engine` the cache lives behind `std::sync::Mutex` so `render_page` can take `&self`. |
-| **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-native-certs`. The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
+| **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-native-certs`. HTTPS only (plain `http://` is accepted for loopback hosts alone, and never via a redirect). The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
 | **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). All user-facing messages carry `at line N, column M` for source positions. `TemplateError` with `#[from]` conversions for `io::Error` and `reqwest::Error`. |
 | **CLI** | `cargo install staticweaver` ships a `staticweaver` binary: `staticweaver render <template> [--set k=v ...] [--no-escape]`. Reads templates from a file path or stdin (`-`). |
 | **Robustness** | proptest harness (256 random cases × 9 properties = ~2300 inputs per `cargo test`) proving the engine never panics on arbitrary input. Differential tests against Minijinja anchor the shared-syntax contract. Three nightly libfuzzer targets (`parse`, `escape`, `dot_path`) cover the bytes proptest misses. Two `#[cfg(kani)]` formal proofs against `escape_html_into` (idempotency + no bare metachars). |
@@ -866,7 +866,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 - `#![forbid(unsafe_code)]` across the entire codebase
 - HTML escape on by default for `render_template` / `render_page` substitutions (5-character OWASP set: `& < > " '`)
 - `render_page` layout names validated before any filesystem call (rejects `..`, `/`, `\`, null bytes)
-- Remote template fetching gated behind an opt-in `remote-templates` cargo feature; default build has no networking
+- Remote template fetching gated behind an opt-in `remote-templates` cargo feature; default build has no networking; HTTPS required (HTTP only to loopback, redirects included)
 - 10 s timeout and 1 MiB body cap on every remote fetch
 - `Content-Type` validation on remote fetches — rejects non-textual MIME types
 - No default third-party URL — `create_template_folder(None)` is an error, not a silent download

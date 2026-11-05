@@ -186,3 +186,43 @@ fn empty_content_type_is_accepted() {
         .create_template_folder(Some(&server.url()))
         .expect("missing Content-Type header must be tolerated");
 }
+
+#[test]
+fn plain_http_to_a_remote_host_is_rejected() {
+    // Template assets fetched over cleartext HTTP from a non-loopback
+    // host can be rewritten in transit. `.invalid` (RFC 2606) never
+    // resolves, so a request that is attempted fails with a DNS error,
+    // not the policy error this test expects.
+    let err = engine()
+        .create_template_folder(Some("http://templates.invalid/site"))
+        .expect_err("plain-HTTP remote URL must not be fetched");
+
+    match err {
+        EngineError::InvalidTemplate(msg) => {
+            assert!(msg.contains("https"), "{msg}");
+        }
+        other => panic!("expected InvalidTemplate, got {other:?}"),
+    }
+}
+
+#[test]
+fn redirect_to_plain_http_remote_is_rejected() {
+    // A loopback server (allowed) that redirects to cleartext HTTP on a
+    // remote host must not be followed.
+    let mut server = mockito::Server::new();
+    let _m = server
+        .mock("GET", "/contact.html")
+        .with_status(302)
+        .with_header(
+            "Location",
+            "http://templates.invalid/contact.html",
+        )
+        .create();
+
+    let err = engine()
+        .create_template_folder(Some(&server.url()))
+        .expect_err("downgrade redirect must not be followed");
+
+    let chain = format!("{err:?}");
+    assert!(chain.contains("refusing plain-HTTP"), "{chain}");
+}

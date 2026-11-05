@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (pre-`1.0.0`, breaking changes may occur in minor/patch releases and are
 called out explicitly below).
 
+## [Unreleased]
+
+### Security
+
+- **Remote templates are fetched over HTTPS only.** With the
+  `remote-templates` feature, `create_template_folder` now rejects an
+  `http://` URL unless its host is loopback (`localhost`, `127.0.0.0/8`,
+  `::1`), and refuses any redirect hop that would fall back to
+  cleartext HTTP on another host. Templates are rendered into the site,
+  so a cleartext fetch let anyone on the network path rewrite them.
+  Callers that passed a plain `http://` URL to a remote host get
+  `EngineError::InvalidTemplate` and must switch to `https://`.
+
 ## [0.0.8] - 2026-11-01
 
 ### Security
