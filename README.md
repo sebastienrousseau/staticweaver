@@ -362,7 +362,7 @@ ctx.set("title".to_string(), "About".to_string());
 let _result = engine.render_page(&ctx, "layout");
 ```
 
-`render_page` rejects layout names containing `/`, `\`, null bytes, or a `..` segment before touching the filesystem, so `render_page(&ctx, "../../etc/passwd")` returns `EngineError::InvalidTemplate` rather than reading outside the template directory.
+Layout, `extends` and partial names must resolve inside the template directory: absolute or drive-prefixed names, null bytes, and `..` steps that climb above the root are refused before touching the filesystem, so `render_page(&ctx, "../../etc/passwd")` returns `EngineError::InvalidTemplate` rather than reading outside it. `FsLoader` and `TokioFsLoader` apply the same rule when called directly. Symlinks inside the template directory are followed.
 
 </details>
 
@@ -865,7 +865,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 
 - `#![forbid(unsafe_code)]` across the entire codebase
 - HTML escape on by default for `render_template` / `render_page` substitutions (5-character OWASP set: `& < > " '`)
-- `render_page` layout names validated before any filesystem call (rejects `..`, `/`, `\`, null bytes)
+- Template names validated before any filesystem call (refuses absolute or prefixed names, null bytes, and `..` that climbs above the template root)
 - Remote template fetching gated behind an opt-in `remote-templates` cargo feature; default build has no networking; HTTPS required (HTTP only to loopback, redirects included)
 - 10 s timeout and 1 MiB body cap on every remote fetch
 - `Content-Type` validation on remote fetches — rejects non-textual MIME types
