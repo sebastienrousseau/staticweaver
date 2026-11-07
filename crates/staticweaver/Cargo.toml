@@ -1,0 +1,239 @@
+# -----------------------------------------------------------------------------
+# Static Weaver - small, safe, fast templating engine for Rust.
+#
+# The std facade (issue #48): Engine, FsLoader / MemoryLoader, the render
+# cache and the remote-template fetcher. Re-exports staticweaver-core at
+# the paths every earlier release used, so `cargo add staticweaver`
+# gives the same API.
+# -----------------------------------------------------------------------------
+
+[package]
+name = "staticweaver"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = """
+Small, safe, fast templating engine for Rust. Mustache-compatible \
+syntax with Tera-style expressions, inheritance with super(), 23 \
+built-in filters, custom filters/tests, pluggable loaders, idempotent \
+HTML escape, line:col error messages, zero unsafe code.
+"""
+documentation = "https://staticweaver.com/documentation/index.html"
+readme = "README.md"
+categories = [
+    "data-structures",
+    "parsing",
+    "encoding",
+    "web-programming",
+    "development-tools"
+]
+keywords = ["cli", "generator", "site", "ssg", "static"]
+
+# Disable cargo's autodiscovery so `examples/support.rs` (a shared helper
+# module, not a binary) is not compiled as an example on its own. The
+# real examples are listed explicitly in the `[[example]]` tables below.
+autoexamples = false
+
+[lib]
+name = "staticweaver"
+path = "src/lib.rs"
+
+# -----------------------------------------------------------------------------
+# Features
+# -----------------------------------------------------------------------------
+[features]
+default = []
+# Fetch templates over HTTPS via create_template_folder.
+remote-templates = ["dep:reqwest", "dep:tempfile", "staticweaver-core/remote-templates"]
+
+# Pulls in axum + tokio so `examples/axum.rs` compiles. Opt-in
+# because the underlying deps are heavy and not needed for the
+# library itself. Run with:
+#   cargo run --example axum --features axum-example
+axum-example = ["dep:axum", "dep:tokio"]
+
+# Enables the `{{ value | json }}` filter for serialising context
+# values as JSON. Pulls serde_json (in staticweaver-core), kept
+# opt-in so default builds stay dep-light.
+json = ["staticweaver-core/json"]
+
+# Emits `tracing` spans on the render hot path (render_page,
+# render_template). Opt-in (issue #39).
+tracing = ["dep:tracing"]
+
+# Async trait surface (issue #37), provided by staticweaver-async.
+# Exposes AsyncTemplateLoader and Engine::{render_template_async,
+# render_page_async}. Runtime-agnostic at this layer.
+async = ["dep:staticweaver-async"]
+
+# WatchLoader (issue #52): wraps any TemplateLoader, caches its
+# templates and drops the cache when files under a watched directory
+# change. Pulls `notify` (CC0-1.0); events are debounced, 200 ms by
+# default.
+watch = ["dep:notify"]
+
+# Default async impl: TokioFsLoader backed by tokio::fs, plus
+# Engine::render_to_async / render_page_to_async (AsyncWrite sinks).
+async-tokio = ["async", "staticweaver-async/tokio", "dep:tokio"]
+
+# -----------------------------------------------------------------------------
+# Dependencies
+# -----------------------------------------------------------------------------
+[dependencies]
+staticweaver-core = { workspace = true, features = ["std"] }
+staticweaver-async = { workspace = true, optional = true }
+
+# reqwest powers the optional remote-template fetcher. Gated behind the
+# `remote-templates` feature so the default build has no networking
+# code. rustls + native-roots avoids pulling OpenSSL.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "rustls-native-certs"], optional = true }
+
+# axum + tokio: used by examples/axum.rs (axum-example feature) AND by
+# the AsyncWrite render sinks (async-tokio feature).
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "fs", "io-util"], optional = true }
+
+# tempfile is used to create temporary directories for the remote-template
+# fetcher.
+tempfile = { version = "3.13", optional = true }
+
+# notify: filesystem change events for the `watch` feature.
+notify = { version = "8", optional = true }
+
+# tracing: gated behind the `tracing` feature.
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"], optional = true }
+
+# -----------------------------------------------------------------------------
+# Development Dependencies
+# -----------------------------------------------------------------------------
+[dev-dependencies]
+# Dependencies required for testing and development.
+criterion = "0.8"                           # Benchmarking library to test performance
+tempfile = "3.13"
+# mockito powers the remote-templates integration tests: it boots a real
+# HTTP server on a random localhost port so `reqwest::blocking` exercises
+# the actual wire path (status codes, Content-Type, body limits) without
+# depending on a live network.
+mockito = "1"
+
+# Comparative benchmarks. Pulled in only for `cargo bench --bench
+# comparative` so they don't bloat ordinary test builds. All three are
+# runtime / compile-time templating engines we measure ourselves against
+# to keep performance claims honest.
+tera = { version = "2", default-features = false }
+minijinja = "3"
+askama = { version = "0.16", default-features = false, features = ["derive", "std", "urlencode"] }
+
+# proptest powers the random-template robustness suite in
+# tests/proptest_parser.rs — every parser code path must NEVER panic
+# on arbitrary input, only return a clean EngineError.
+proptest = "1"
+
+# Tests and examples build `Value::Map` payloads as `fnv::FnvHashMap`,
+# the concrete type behind `staticweaver::context::Map`.
+fnv = "1.0"
+
+[[example]]
+name = "hello"
+path = "examples/hello.rs"
+
+[[example]]
+name = "context"
+path = "examples/context.rs"
+
+[[example]]
+name = "cache"
+path = "examples/cache.rs"
+
+[[example]]
+name = "engine"
+path = "examples/engine.rs"
+
+[[example]]
+name = "errors"
+path = "examples/errors.rs"
+
+[[example]]
+# Gated behind `remote-templates`; without the feature the example
+# prints a hint telling the user how to enable it.
+name = "remote"
+path = "examples/remote.rs"
+
+[[example]]
+# Drops staticweaver into a minimal Axum web server so the
+# integration recipe is testable end-to-end. Opt-in because axum +
+# tokio are heavy. Run with:
+#   cargo run --example axum --features axum-example
+name = "axum"
+path = "examples/axum.rs"
+required-features = ["axum-example"]
+
+[[example]]
+# WatchLoader + Engine: re-render when a template changes (issue #52).
+#   cargo run --example watch --features watch
+name = "watch"
+path = "examples/watch.rs"
+required-features = ["watch"]
+
+[[example]]
+# Async render via Tokio (issues #37 + #38). Demonstrates
+# AsyncTemplateLoader, render_template_async, render_page_async,
+# render_to_async (AsyncWrite sink), and Arc<Engine> fan-out across
+# tokio tasks.
+name = "async_tokio"
+path = "examples/async_tokio.rs"
+required-features = ["async-tokio"]
+
+[[example]]
+# {{#extends}} + {{#block}} + {{ super() }} showcase. Uses
+# MemoryLoader so the example is self-contained.
+name = "inheritance"
+path = "examples/inheritance.rs"
+
+[[example]]
+# Built-in + custom filter / test pipeline showcase.
+name = "filters"
+path = "examples/filters.rs"
+
+[[example]]
+# FsLoader / MemoryLoader / a custom hot-mutable loader
+# implementing TemplateLoader directly.
+name = "loaders"
+path = "examples/loaders.rs"
+
+[[example]]
+# Expression language + #each / range / break / continue / set.
+name = "control_flow"
+path = "examples/control_flow.rs"
+
+# -----------------------------------------------------------------------------
+# Criterion Benchmark
+# -----------------------------------------------------------------------------
+[[bench]]
+# Benchmarking configuration for performance testing.
+name = "template_benchmark"                   # Name of the benchmark
+harness = false                             # Disable the default benchmark harness (used by Criterion)
+
+[[bench]]
+# Comparative matrix vs Tera, Minijinja, and Askama. Uses the same
+# Criterion harness; produces one comparison group per workload so
+# `cargo bench --bench comparative` prints all four engines side by side.
+name = "comparative"
+path = "benches/comparative.rs"
+harness = false
+
+# -----------------------------------------------------------------------------
+# Documentation Configuration
+# -----------------------------------------------------------------------------
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[lints]
+workspace = true

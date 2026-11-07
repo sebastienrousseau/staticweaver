@@ -1,0 +1,13 @@
+# cargo-tarpaulin settings, read by the Codecov upload job of the
+# reusable rust-ci.yml (sebastienrousseau/pipelines), which runs
+# `cargo tarpaulin --out Lcov --no-fail-fast --all-features` from the
+# repository root.
+#
+# On Linux tarpaulin defaults to its ptrace engine, which misattributes
+# lines in the async and CLI crates of the workspace and reported
+# 94.04% where `cargo llvm-cov` (the in-repo `Coverage >= 98%` gate)
+# measures over 98%. The LLVM engine uses the same source-based
+# instrumentation as cargo-llvm-cov, so Codecov and the in-repo gate
+# now measure coverage the same way.
+[coverage]
+engine = "Llvm"

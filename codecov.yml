@@ -40,11 +40,18 @@ coverage:
         target: 90%
         threshold: 1%
 
-# Ignore generated / non-production paths from coverage entirely.
+# Ignore non-production paths from coverage entirely: integration
+# tests, benches and examples, the same scope as before the workspace
+# split (v0.0.9 ignored the root `tests/`, `benches/` and `examples/`).
+# Plain folder paths, which Codecov matches as prefixes: the
+# `crates/*/tests/**/*` globs used in the first v0.0.10 draft matched
+# nothing, so the tests and examples/support.rs were counted.
 ignore:
-  - "benches/**/*"
-  - "examples/**/*"
-  - "tests/**/*"
+  - "crates/staticweaver/benches"
+  - "crates/staticweaver/examples"
+  - "crates/staticweaver/tests"
+  - "crates/staticweaver-cli/tests"
+  - "crates/staticweaver-core/examples"
 
 comment:
   layout: "diff, flags, files"

@@ -1,0 +1,52 @@
+[package]
+name = "staticweaver-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/staticweaver-core"
+readme = "README.md"
+description = """
+Core of the staticweaver templating engine: parser, expression \
+evaluator, renderer, idempotent HTML escape, Value and errors. \
+no_std + alloc; the `staticweaver` crate adds the std facade.
+"""
+categories = ["template-engine", "no-std", "parsing", "web-programming"]
+keywords = ["template", "no_std", "mustache", "html", "wasm"]
+
+[features]
+# `std` (default) keeps the API every release before the workspace
+# split had: `Value::Map` is an `FnvHashMap`, `EngineError::Io` exists,
+# and template names are checked with `euxis_commons::path::safe_join`.
+# Turn it off for `no_std + alloc` targets (issue #49).
+default = ["std"]
+std = ["fnv/std", "thiserror/std", "dep:euxis-commons"]
+# `{{ value | json }}` filter.
+json = ["dep:serde_json"]
+# Only adds the `EngineError::Reqwest` variant the std facade's
+# remote-template fetcher needs; no networking code lives here.
+remote-templates = ["std", "dep:reqwest"]
+
+[dependencies]
+fnv = { version = "1.0", default-features = false }
+thiserror = { version = "2.0", default-features = false }
+euxis-commons = { version = "0.0.9", default-features = false, features = ["path"], optional = true }
+serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
+reqwest = { version = "0.13", default-features = false, optional = true }
+
+# Property tests over the private parser helpers. Not on wasm, so
+# `cargo build --example wasi --target wasm32-wasip2` builds (proptest's
+# wait-timeout dependency does not support it).
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+proptest = "1"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+

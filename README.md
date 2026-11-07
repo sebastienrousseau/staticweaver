@@ -16,6 +16,7 @@
   <a href="https://docs.rs/staticweaver"><img src="https://img.shields.io/badge/docs.rs-staticweaver-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" alt="Docs.rs" /></a>
   <a href="https://codecov.io/gh/sebastienrousseau/staticweaver"><img src="https://img.shields.io/codecov/c/github/sebastienrousseau/staticweaver?style=for-the-badge&logo=codecov" alt="Coverage" /></a>
   <a href="https://lib.rs/crates/staticweaver"><img src="https://img.shields.io/crates/v/staticweaver?style=for-the-badge&label=lib.rs&color=orange" alt="lib.rs" /></a>
+  <a href="https://github.com/sebastienrousseau/staticweaver/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/WASI-Preview_2-654ff0?style=for-the-badge&logo=webassembly" alt="WASI Preview 2: the wasi example builds for wasm32-wasip2 in CI" /></a>
 </p>
 
 ---
@@ -43,7 +44,7 @@
 
 ```toml
 [dependencies]
-staticweaver = "0.0.9"
+staticweaver = "0.0.10"
 ```
 
 ### Optional features
@@ -52,7 +53,7 @@ All optional integrations are off by default. Enable only what the application n
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.9", features = ["async-tokio", "tracing", "json"] }
+staticweaver = { version = "0.0.10", features = ["async-tokio", "tracing", "json"] }
 ```
 
 | Feature | Pulls in | Adds |
@@ -62,7 +63,15 @@ staticweaver = { version = "0.0.9", features = ["async-tokio", "tracing", "json"
 | `tracing` | `tracing` | `#[tracing::instrument]` spans on `render_template` / `render_page` (`staticweaver.render_template`, `staticweaver.render_page`). |
 | `json` | `serde_json` | `{{ value \| json \| safe }}` filter. |
 | `remote-templates` | `reqwest` (`rustls-native-certs`, no OpenSSL) | `Engine::create_template_folder(Some(url))` HTTPS fetcher (loopback may use HTTP; 10 s timeout, 1 MiB body cap, `Content-Type` validation). |
-| `axum-example` | `axum`, `tokio` | Compiles `examples/axum.rs`. |
+| `watch` | `notify` | `watch::WatchLoader`: wraps any loader, caches its templates, and drops the cache on debounced (200 ms default) file-change events; `subscribe()` delivers each batch. |
+| `axum-example` | `axum`, `tokio` | Compiles `crates/staticweaver/examples/axum.rs`. |
+
+The engine itself lives in [`staticweaver-core`](crates/staticweaver-core),
+which `staticweaver` re-exports. It builds for `no_std + alloc` targets
+(embedded, `wasm32`, edge runtimes) with
+`staticweaver-core = { version = "0.0.10", default-features = false }`;
+CI cross-compiles it for `thumbv7em-none-eabihf` and `wasm32-wasip2`
+(`make nostd` runs the same builds locally).
 
 ### Build from source
 
@@ -122,7 +131,7 @@ staticweaver is designed to be the **no-compromise** templating engine for Rust:
 - **LRU cache** -- TTL + true LRU eviction; deterministic, collision-safe cache keys
 - **Stream rendering** -- `render_to(template, ctx, &mut io::Write)` (sync) and `render_to_async` (async) for HTTP body sinks
 - **Line:column errors** -- every error carries `at line N, column M`
-- **CLI binary** -- `cargo install staticweaver` ships a shell-side renderer
+- **CLI binary** -- `cargo install staticweaver-cli` ships a shell-side renderer
 - **Property-based + differential testing** -- 1500 random inputs/run, byte-equality vs Minijinja
 - **Coverage-guided fuzzing** -- three libfuzzer targets nightly (`parse`, `escape`, `dot_path`)
 - **Formal verification** -- Kani proofs of `html_escape` idempotency
@@ -290,7 +299,7 @@ A bare path like `{{#if user}}` keeps its truthiness semantics — it evaluates 
 | **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. **True LRU eviction** on overflow — `Cache::get` (`&mut self`) bumps access recency. Methods: `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. **Observability**: `CacheStats { inserts, hits, misses, evictions, ttl_expired }` via `Cache::stats()` for cheap export to prometheus / metrics / opentelemetry without forcing a dep choice. On the `Engine` the cache lives behind `std::sync::Mutex` so `render_page` can take `&self`. |
 | **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-native-certs`. HTTPS only (plain `http://` is accepted for loopback hosts alone, and never via a redirect). The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
 | **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). All user-facing messages carry `at line N, column M` for source positions. `TemplateError` with `#[from]` conversions for `io::Error` and `reqwest::Error`. |
-| **CLI** | `cargo install staticweaver` ships a `staticweaver` binary: `staticweaver render <template> [--set k=v ...] [--no-escape]`. Reads templates from a file path or stdin (`-`). |
+| **CLI** | `cargo install staticweaver-cli` ships a `staticweaver` binary: `staticweaver render <template> [--set k=v ...] [--no-escape] [--watch]`. Reads templates from a file path or stdin (`-`); `--watch` re-renders on change. |
 | **Robustness** | proptest harness (256 random cases × 9 properties = ~2300 inputs per `cargo test`) proving the engine never panics on arbitrary input. Differential tests against Minijinja anchor the shared-syntax contract. Three nightly libfuzzer targets (`parse`, `escape`, `dot_path`) cover the bytes proptest misses. Two `#[cfg(kani)]` formal proofs against `escape_html_into` (idempotency + no bare metachars). |
 | **Supply chain** | `cargo deny` (advisories, bans, licenses, sources — yanked denied) + `cargo audit` (CVSS gate) + `osv-scanner` (GHSA + RUSTSEC + crates.io) + `cargo vet` (Mozilla / Google / bytecode-alliance / Embark imports). Release artifacts: CycloneDX + SPDX JSON SBOMs, cosign keyless OIDC signatures (Sigstore), all attached to the GitHub Release. |
 | **Observability** | `tracing` feature (opt-in) adds `#[tracing::instrument]` spans on `render_template` / `render_page` with template-length / layout / context.len fields. Wire to `tracing_subscriber`, `tracing-opentelemetry`, or any other consumer. |
@@ -533,7 +542,7 @@ Bounded caches use **true LRU eviction**: when a new key would push the cache pa
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.9", features = ["remote-templates"] }
+staticweaver = { version = "0.0.10", features = ["remote-templates"] }
 ```
 
 ```rust,ignore
@@ -558,7 +567,7 @@ Without the feature, `create_template_folder(Some(url))` returns `EngineError::I
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.9", features = ["json"] }
+staticweaver = { version = "0.0.10", features = ["json"] }
 ```
 
 ```rust,ignore
@@ -622,7 +631,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 <details>
 <summary><b>Async rendering with the <code>async-tokio</code> feature (v0.0.4)</b></summary>
 
-Requires `staticweaver = { version = "0.0.9", features = ["async-tokio"] }`.
+Requires `staticweaver = { version = "0.0.10", features = ["async-tokio"] }`.
 
 ```rust,ignore
 use staticweaver::loader_async::MemoryAsyncLoader;
@@ -666,7 +675,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 <details>
 <summary><b><code>tracing</code> spans on the render hot path</b></summary>
 
-Requires `staticweaver = { version = "0.0.9", features = ["tracing"] }`.
+Requires `staticweaver = { version = "0.0.10", features = ["tracing"] }`.
 
 ```rust,ignore
 use staticweaver::{Context, Engine};
@@ -722,13 +731,13 @@ All counters are monotonically increasing `u64`s. Take two snapshots and subtrac
 <summary><b>CLI binary</b></summary>
 
 ```bash
-cargo install staticweaver
+cargo install staticweaver-cli
 
 staticweaver render hello.html --set name=Ada
 echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
 ```
 
-`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape. Errors exit non-zero.
+`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape. `--watch` re-renders to stdout whenever the template or anything under its directory changes (debounced, 200 ms) and stops cleanly on Ctrl-C (`staticweaver render hello.html --set name=Ada --watch`). Errors exit non-zero.
 
 </details>
 
@@ -780,7 +789,7 @@ Both constructors panic if `ttl` is zero. `Cache::default()` yields a 60 s TTL w
 cargo run --example hello
 ```
 
-All examples live in `examples/` and use the shared `support.rs` helper for the spinner/checkmark UI. See [`examples/README.md`](examples/README.md) for an annotated index.
+All examples live in `crates/staticweaver/examples/` and use the shared `support.rs` helper for the spinner/checkmark UI. See [`examples/README.md`](crates/staticweaver/examples/README.md) for an annotated index.
 
 | Example | Covers |
 | :--- | :--- |
@@ -796,6 +805,8 @@ All examples live in `examples/` and use the shared `support.rs` helper for the 
 | `remote` | (feature-gated) `create_template_folder(Some(url))` against a local mock server. Run with `cargo run --example remote --features remote-templates`. |
 | `async_tokio` | (feature-gated) **v0.0.4** Async render via Tokio: `MemoryAsyncLoader`, `render_template_async`, `render_page_async`, `render_to_async` (AsyncWrite sink), and `Arc<Engine>` fan-out across tokio tasks. Run with `cargo run --example async_tokio --features async-tokio`. |
 | `axum` | (feature-gated) End-to-end Axum web-server integration: render-to-`String`, render-to-`Vec<u8>` via `render_to`, per-request context. Run with `cargo run --example axum --features axum-example`. |
+| `watch` | (feature-gated) `WatchLoader` + `Engine`: render, edit the template, wait for the debounced change, clear the render cache, render again. Run with `cargo run --example watch --features watch`. |
+| `wasi` | `staticweaver-core` in a WASI Preview 2 component: inheritance, filters and `#each` over an in-memory loader. Lives in `crates/staticweaver-core/examples/`. Build with `make wasi`, run with `wasmtime run target/wasm32-wasip2/release/examples/wasi.wasm` (run instructions and the Wasmtime version in the file header). |
 
 ---
 
@@ -829,7 +840,7 @@ cargo test --test snapshots          # 16 golden-output regressions
 | :--- | :--- | :--- | :--- |
 | API reference (release) | [docs.rs/staticweaver](https://docs.rs/staticweaver) | docs.rs | `crates.io` publish |
 | API reference (tip-of-`main`) | [doc.staticweaver.com](https://doc.staticweaver.com/) | `.github/workflows/docs.yml` → GitHub Pages (Pages-via-Actions, no `gh-pages` branch) | every push to `main` |
-| README + crate-level prose | [docs.rs/staticweaver](https://docs.rs/staticweaver) (front page) | `#![doc = include_str!("../README.md")]` in `src/lib.rs` | every `cargo doc` |
+| README + crate-level prose | [docs.rs/staticweaver](https://docs.rs/staticweaver) (front page) | `#![doc = include_str!("../README.md")]` in `crates/staticweaver/src/lib.rs` | every `cargo doc` |
 | CHANGELOG / SECURITY / FAQ | This GitHub repo | -- | every push |
 
 Both the CI `Docs` job and the standalone `docs.yml` workflow build
@@ -894,9 +905,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 | Rich Jinja2 feature set (macros, custom filters w/ Tera args, i18n hooks) | **Tera** |
 | Bytecode VM and the absolute fastest runtime engine for complex templates | **Minijinja** |
 | Mustache compatibility for porting templates between languages | **Handlebars** or **staticweaver** |
-| **Small (`#![forbid(unsafe_code)]`), Tera-style expressions + inheritance with `super()`, SIMD HTML escape, MSRV 1.89, networking is opt-in** | **staticweaver** |
+| **Small (`#![forbid(unsafe_code)]`), Tera-style expressions + inheritance with `super()`, idempotent byte-scan HTML escape, MSRV 1.89, networking is opt-in** | **staticweaver** |
 
-The realistic differentiator: staticweaver is the only Rust template engine that combines `#![forbid(unsafe_code)]` with full inheritance + `super()`, range iteration, custom filters/tests, pluggable loaders, and SIMD escape — and stays small enough (~5k LoC engine) to read in an afternoon.
+The realistic differentiator: staticweaver is the only Rust template engine that combines `#![forbid(unsafe_code)]` with full inheritance + `super()`, range iteration, custom filters/tests, pluggable loaders, and an idempotent HTML escape — and stays small enough (~5k LoC engine) to read in an afternoon.
 
 </details>
 
@@ -905,7 +916,7 @@ The realistic differentiator: staticweaver is the only Rust template engine that
 
 `v0.0.3` is the latest release on crates.io. It builds on the `v0.0.2` cycle (which moved the engine beyond Mustache-tier substitution) with HTML-escape idempotency, opt-in lax mode, a collision-safe `Context::hash()`, a re-tuned escape fast path, and the full Dependabot backlog drained (including RUSTSEC-2026-0185 remediation). It's tested with **480+ tests** (lib, integration, snapshot, differential vs Minijinja, property-based via proptest, lax-mode matrix), **98% line-coverage floor enforced in CI**, **100% rustdoc example coverage compile-time-enforced** (`missing_docs = "deny"`), and a **comparative bench matrix** vs Tera/Minijinja/Askama. Cross-platform CI runs on Linux, macOS, and Windows. `#![forbid(unsafe_code)]` is enforced at the crate root.
 
-That said, it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.9"`) if you want to control upgrades manually.
+That said, it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.10"`) if you want to control upgrades manually.
 
 </details>
 
@@ -976,7 +987,7 @@ tokio::spawn(async move {
 
 Yes — render to a `String` (`render_template` / `render_page`) or stream into the response body (`render_to` / `render_page_to` accepts any `io::Write`). There is no framework integration layer because none is needed; the engine is a pure function over `(template, context) -> String`.
 
-A working Axum example with three integration patterns lives in [`examples/axum.rs`](examples/axum.rs). Run it with `cargo run --example axum --features axum-example`.
+A working Axum example with three integration patterns lives in [`examples/axum.rs`](crates/staticweaver/examples/axum.rs). Run it with `cargo run --example axum --features axum-example`.
 
 </details>
 
@@ -1017,7 +1028,7 @@ engine.add_test(
 );
 ```
 
-See [`examples/filters.rs`](examples/filters.rs) for a runnable showcase.
+See [`examples/filters.rs`](crates/staticweaver/examples/filters.rs) for a runnable showcase.
 
 </details>
 
@@ -1052,7 +1063,7 @@ The position points at the offending byte in the *original* template — for par
 <details>
 <summary><b>The engine panicked on weird input — is that a bug?</b></summary>
 
-Yes. The engine is fuzzed via [proptest](tests/proptest_parser.rs) — 6 properties × 256 cases each (~1500 random inputs per `cargo test`) — asserting that arbitrary text, malformed tags, random expressions, and edge-case math (full `i64` range × all four ops) **never panic**.
+Yes. The engine is fuzzed via [proptest](crates/staticweaver/tests/proptest_parser.rs) — 6 properties × 256 cases each (~1500 random inputs per `cargo test`) — asserting that arbitrary text, malformed tags, random expressions, and edge-case math (full `i64` range × all four ops) **never panic**.
 
 If you find input that panics: please file an issue with the template + context. We'll add it to the proptest harness so it can never regress.
 
@@ -1061,14 +1072,14 @@ If you find input that panics: please file an issue with the template + context.
 <details>
 <summary><b>I want to test my templates without writing a Rust harness — how?</b></summary>
 
-`cargo install staticweaver` ships a CLI binary:
+`cargo install staticweaver-cli` ships a CLI binary:
 
 ```bash
 staticweaver render hello.html --set name=Ada --set greeting=Hi
 echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
 ```
 
-`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape.
+`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape. `--watch` re-renders to stdout whenever the template or anything under its directory changes (debounced, 200 ms) and stops cleanly on Ctrl-C (`staticweaver render hello.html --set name=Ada --watch`).
 
 </details>
 

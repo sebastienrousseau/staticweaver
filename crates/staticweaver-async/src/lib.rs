@@ -3,14 +3,16 @@
 
 //! # Async loader (issue #37)
 //!
-//! Mirror of [`crate::engine::TemplateLoader`] for async runtimes.
+//! Mirror of [`staticweaver_core::TemplateLoader`] for async runtimes.
 //! Without this module, async users would have to spawn blocking
 //! threads (`tokio::task::spawn_blocking`) to load templates — which
 //! defeats the point of being in an async runtime in the first place.
 //!
-//! Gated behind the `async` feature so default builds stay
-//! dep-light. The reference implementation `TokioFsLoader` is
-//! further gated behind `async-tokio` so callers running on other
+//! The `staticweaver` crate re-exports this crate as
+//! `staticweaver::loader_async` behind its `async` feature, so default
+//! builds stay dep-light. The reference implementation `TokioFsLoader`
+//! is further gated behind this crate's `tokio` feature (the facade's
+//! `async-tokio`) so callers running on other
 //! executors (async-std, smol, glommio) aren't forced to pull in
 //! tokio. (Intentional plain code-span, not intradoc link —
 //! `TokioFsLoader` is itself feature-gated and an intradoc link
@@ -25,22 +27,26 @@
 //! so impls need Rust 1.75 or newer; the crate's 1.89 MSRV covers it.
 //!
 //! ```no_run
-//! use staticweaver::loader_async::AsyncTemplateLoader;
+//! use staticweaver_async::AsyncTemplateLoader;
 //! use std::borrow::Cow;
 //!
 //! struct EchoLoader;
 //!
 //! impl AsyncTemplateLoader for EchoLoader {
-//!     async fn load(&self, name: &str) -> Result<Cow<'_, str>, staticweaver::EngineError> {
+//!     async fn load(&self, name: &str) -> Result<Cow<'_, str>, staticweaver_async::EngineError> {
 //!         Ok(Cow::Owned(format!("loaded: {name}")))
 //!     }
 //! }
 //! ```
 
-use crate::error::EngineError;
+#![forbid(unsafe_code)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(missing_docs)]
+
+pub use staticweaver_core::EngineError;
 use std::borrow::Cow;
 
-/// Async counterpart to [`crate::engine::TemplateLoader`].
+/// Async counterpart to [`staticweaver_core::TemplateLoader`].
 ///
 /// Implementations resolve a template name (the bare layout key passed
 /// to `render_page_async` / `render_template_async`) to its source
@@ -59,10 +65,8 @@ use std::borrow::Cow;
 /// # Examples
 ///
 /// ```no_run
-/// // `ignore` because the surface needs the `async` feature; the
-/// // code below is a faithful sketch of a custom impl.
-/// use staticweaver::loader_async::AsyncTemplateLoader;
-/// use staticweaver::EngineError;
+/// use staticweaver_async::AsyncTemplateLoader;
+/// use staticweaver_async::EngineError;
 /// use std::borrow::Cow;
 ///
 /// struct EchoLoader;
@@ -82,17 +86,14 @@ pub trait AsyncTemplateLoader: Send + Sync {
     /// # Examples
     ///
     /// ```no_run
-    /// use staticweaver::loader_async::MemoryAsyncLoader;
-    /// use staticweaver::{Context, Engine};
+    /// use staticweaver_async::{AsyncTemplateLoader, MemoryAsyncLoader};
     /// use std::collections::HashMap;
-    /// use std::time::Duration;
     ///
-    /// # async fn run() -> Result<(), staticweaver::EngineError> {
-    /// let loader = MemoryAsyncLoader::new(HashMap::new());
-    /// let engine = Engine::new("", Duration::from_secs(60));
-    /// let ctx = Context::new();
-    /// // Internally calls loader.load("page").await; surface is async.
-    /// let _ = engine.render_template_async(&loader, "page", &ctx).await;
+    /// # async fn run() -> Result<(), staticweaver_async::EngineError> {
+    /// let mut store = HashMap::new();
+    /// let _ = store.insert("page".to_string(), "Hi".to_string());
+    /// let loader = MemoryAsyncLoader::new(store);
+    /// assert_eq!(loader.load("page").await?, "Hi");
     /// # Ok(()) }
     /// ```
     fn load(
@@ -104,26 +105,26 @@ pub trait AsyncTemplateLoader: Send + Sync {
 }
 
 /// Default async loader backed by `tokio::fs`. Equivalent to the sync
-/// [`crate::engine::FsLoader`] but uses non-blocking file reads.
+/// `staticweaver::engine::FsLoader` but uses non-blocking file reads.
 ///
-/// Gated behind the `async-tokio` feature so callers using other
+/// Gated behind the `tokio` feature (`async-tokio` in the facade) so callers using other
 /// async runtimes don't pull in tokio just for filesystem reads.
 ///
 /// # Examples
 ///
 /// ```no_run
-/// use staticweaver::loader_async::TokioFsLoader;
+/// use staticweaver_async::TokioFsLoader;
 ///
 /// let loader = TokioFsLoader::new("templates");
 /// // Pair with Engine::render_page_async(&loader, &ctx, "layout").await.
 /// ```
-#[cfg(feature = "async-tokio")]
+#[cfg(feature = "tokio")]
 #[derive(Debug, Clone)]
 pub struct TokioFsLoader {
     root: std::path::PathBuf,
 }
 
-#[cfg(feature = "async-tokio")]
+#[cfg(feature = "tokio")]
 impl TokioFsLoader {
     /// Create a TokioFsLoader rooted at `root`. Templates are resolved
     /// relative to this directory — `loader.load("blog/post")` opens
@@ -132,7 +133,7 @@ impl TokioFsLoader {
     /// # Examples
     ///
     /// ```no_run
-    /// use staticweaver::loader_async::TokioFsLoader;
+    /// use staticweaver_async::TokioFsLoader;
     /// use std::path::PathBuf;
     ///
     /// let loader = TokioFsLoader::new(PathBuf::from("templates"));
@@ -143,14 +144,15 @@ impl TokioFsLoader {
     }
 }
 
-#[cfg(feature = "async-tokio")]
+#[cfg(feature = "tokio")]
 impl AsyncTemplateLoader for TokioFsLoader {
     async fn load(
         &self,
         name: &str,
     ) -> Result<Cow<'_, str>, EngineError> {
-        let path =
-            crate::engine::resolve_template_path(&self.root, name)?;
+        let path = staticweaver_core::path::resolve_template_path(
+            &self.root, name,
+        )?;
         let bytes =
             tokio::fs::read(&path).await.map_err(EngineError::Io)?;
         let text = String::from_utf8(bytes).map_err(|e| {
@@ -168,7 +170,7 @@ impl AsyncTemplateLoader for TokioFsLoader {
 /// # Examples
 ///
 /// ```no_run
-/// use staticweaver::loader_async::MemoryAsyncLoader;
+/// use staticweaver_async::MemoryAsyncLoader;
 /// use std::collections::HashMap;
 ///
 /// let mut store = HashMap::new();
@@ -187,7 +189,7 @@ impl MemoryAsyncLoader {
     /// # Examples
     ///
     /// ```no_run
-    /// use staticweaver::loader_async::MemoryAsyncLoader;
+    /// use staticweaver_async::MemoryAsyncLoader;
     /// use std::collections::HashMap;
     ///
     /// let store: HashMap<String, String> = HashMap::new();

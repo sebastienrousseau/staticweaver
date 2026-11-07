@@ -12,6 +12,111 @@ called out explicitly below).
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-11-07
+
+0.0.9 was tagged but never published: its release run was cancelled
+before the crates.io step, so there is no 0.0.9 on crates.io and no
+0.0.9 GitHub release. 0.0.10 is the next published version after
+0.0.8 and includes every change listed under 0.0.9 below.
+
+### Changed
+
+- **The repository is a Cargo workspace of four crates** (#48):
+  `staticweaver-core` (parser, expression evaluator, renderer, HTML
+  escape, `Value`, `Context`, errors), `staticweaver` (the std facade:
+  `Engine`, `FsLoader`, `MemoryLoader`, the render cache, remote
+  templates), `staticweaver-async` (`AsyncTemplateLoader`,
+  `MemoryAsyncLoader`, `TokioFsLoader`) and `staticweaver-cli` (the
+  `staticweaver` binary). `staticweaver` re-exports the core and async
+  types at their old paths (`staticweaver::context`,
+  `staticweaver::error`, `staticweaver::engine::{TemplateLoader,
+  FilterFn, TestFn}`, `staticweaver::loader_async`), so code written
+  against 0.0.9 compiles unchanged. Internal dependencies are pinned
+  to `=0.0.10`; the four crates release in lockstep.
+- **Release and CI follow the workspace.** The release workflow
+  publishes the four crates in dependency order (core, async,
+  staticweaver, cli), skipping any already on crates.io at the
+  version, and attaches a CycloneDX SBOM and a Sigstore-signed
+  `.crate` for each. CI adds a `no_std` cross-compile matrix
+  (`thumbv7em-none-eabihf`, `wasm32-wasip2`) and a WASI example
+  build, and checks doc-example coverage per library crate; the Kani
+  job targets `staticweaver-core`, where the proofs now live.
+  Dependabot drops its stale `askama_escape` ignore rule.
+- **The CLI moved to its own crate.** `cargo install staticweaver` no
+  longer installs a binary; use `cargo install staticweaver-cli`. The
+  binary is still called `staticweaver` and takes the same arguments.
+- The render loop was split into one function per tag kind (`#if`,
+  `#each`, `#block`, partials, substitution, ...) as it moved into
+  `staticweaver-core`. Output and error messages are unchanged: the
+  integration, snapshot, differential and property tests moved with
+  their crate and pass unmodified, and the unit tests that called the
+  private `validate_path` helper now call its public successor
+  `validate_name`.
+
+### Documentation
+
+- **Architecture Decision Records** (#54) under `adr/`, in MADR
+  format, indexed in `adr/README.md`: ADR-001 forbid `unsafe`,
+  ADR-002 reject a bytecode VM, ADR-003 sync by default with async
+  opt-in, ADR-004 the workspace split, ADR-005 SHA-pinned GitHub
+  Actions, ADR-006 drop `askama_escape`. Each cites the file, section
+  or commit its claims come from; reasons and measurements the
+  repository does not record are marked "maintainer to confirm".
+- The README no longer claims a SIMD HTML escape: the SIMD path left
+  with `askama_escape` in v0.0.3 (see `PERFORMANCE.md`); the escape
+  is an idempotent byte scan.
+
+### Added
+
+- `staticweaver_core::Renderer`, the borrowed-configuration renderer
+  `Engine` now delegates to, and `staticweaver_core::Registry`, the
+  name lookup for custom filters and tests.
+- `staticweaver_core::path::{validate_name, resolve_template_path}`:
+  the template-name containment rule, now public so the facade and
+  the async crate share one implementation.
+- `staticweaver::context::Map`: names the map type behind
+  `Value::Map` (`fnv::FnvHashMap<String, Value>`, as before).
+- **`staticweaver-core` builds for `no_std + alloc`** (#49). With
+  `default-features = false` the crate is `#![no_std]`:
+  `context::Map` (and so `Value::Map` and `Context`) is a `BTreeMap`,
+  `EngineError::Io` / `TemplateError::Io` are absent, template names
+  are checked with a lexical rule over `/` and `\` that agrees with the
+  std rule on Unix-style names (tested), `Context::hash` uses FNV-1a,
+  and the `round` / `ceil` / `floor` filters use an exact
+  integer-truncation fallback (tested against `std`). Nothing in core
+  uses `std::time`; the TTL cache stays in the facade. Rendering into
+  a `core::fmt::Write` sink is `Renderer::render_to`; the facade's
+  `Engine::render_to` remains the `std::io::Write` shim. `make nostd`
+  and a CI job build it for `thumbv7em-none-eabihf` and
+  `wasm32-wasip2`, with and without the `json` feature.
+- **WASI Preview 2 example** (#50):
+  `crates/staticweaver-core/examples/wasi.rs` renders an inheritance
+  chain with filters and `#each` from an in-memory loader inside a
+  `wasm32-wasip2` component. `make wasi` and a CI job build it; the
+  header documents running it with Wasmtime 48.0.2, the version it
+  was run with. The README carries a WASI Preview 2 badge backed by
+  that CI job.
+- **`WatchLoader`** (#52, feature `watch`, pulls `notify` 8):
+  `staticweaver::watch::WatchLoader` wraps any `TemplateLoader`,
+  caches what it loads, and drops the cache when files under a
+  watched directory change. Events are debounced (`DEFAULT_DEBOUNCE`,
+  200 ms; `WatchLoader::with_debounce` sets another window); access
+  events are ignored so reading a template does not trigger a reload.
+  `subscribe()` delivers each batch of changed paths, so a host can
+  call `Engine::clear_cache()` and re-render; `invalidate()` and
+  `generation()` cover manual use. Example: `examples/watch.rs`. The
+  debounce logic is tested with synthetic events; two tests marked
+  OS-dependent exercise the real platform watcher with 20 s timeouts.
+- **`staticweaver render <file> --watch`** (#53): renders once, then
+  re-renders to stdout whenever the template or anything under its
+  directory changes, with a `WatchLoader` as the engine's loader so
+  partials are cached until they change. Render errors are reported
+  and watching continues; Ctrl-C (SIGINT) stops it with exit 0.
+  `--watch` with stdin (`-`) is refused. The arg parser stays
+  hand-rolled (no clap); the CLI gains the `ctrlc` dependency for
+  the signal handler. Smoke tests (Unix) cover startup, a re-render
+  after an edit (OS-dependent), and clean shutdown on SIGINT.
+
 ## [0.0.9] - 2026-11-07
 
 ### Security

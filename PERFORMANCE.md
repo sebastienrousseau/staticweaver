@@ -142,7 +142,7 @@ side-by-side comparison plots.
 ## Reproducing the comparison
 
 The comparison templates are defined inline in
-[`benches/comparative.rs`](benches/comparative.rs) — one struct or
+[`crates/staticweaver/benches/comparative.rs`](crates/staticweaver/benches/comparative.rs) — one struct or
 template literal per engine per workload. Each engine renders to
 `String`. Templates are translated to each engine's syntax; the
 *output* is what we keep equivalent, not the literal input.

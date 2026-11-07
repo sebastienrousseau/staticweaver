@@ -26,7 +26,7 @@ concurrency:
 jobs:
   ci:
     name: Rust CI
-    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@83114142d0a14e9c6302a9ba9e716a0cc53e4e01 # main 2026-10-13
+    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@0e32d48f9ec5e8b684eb3fdd666c66e728eb9864 # main 2026-11-07
     with:
       rust-version: 'stable'
       run-clippy: true
@@ -66,11 +66,13 @@ jobs:
   # Miri — undefined-behaviour interpreter (issue #42). Even with
   # `#![forbid(unsafe_code)]` at the crate root, Miri catches UB
   # introduced by derive-macro output (thiserror) and transitive deps
-  # (fnv, tempfile). Allowed-to-fail for v0.0.4; hard gate from v0.0.5.
+  # (fnv, tempfile). A hard gate: the job was meant to become one in
+  # v0.0.5 but kept `continue-on-error` until v0.0.10, when its run on
+  # the release PR passed every library test of the workspace (308
+  # staticweaver, 86 staticweaver-core).
   miri:
     name: Miri (nightly, --lib)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust nightly + Miri
@@ -196,36 +198,41 @@ jobs:
         run: cargo test --doc --all-features
 
       - name: Enforce 100% doc-example coverage
+        # One gate per library crate of the workspace (issue #48).
         run: |
           set -euo pipefail
-          output="$(cargo +nightly rustdoc --lib --all-features -- \
-            -Z unstable-options --show-coverage 2>&1 | tee /dev/stderr)"
+          for crate in staticweaver-core staticweaver-async staticweaver; do
+            echo "::group::${crate}"
+            output="$(cargo +nightly rustdoc -p "${crate}" --lib --all-features -- \
+              -Z unstable-options --show-coverage 2>&1 | tee /dev/stderr)"
 
-          # Nightlies from roughly 2026-08 write the coverage table to
-          # target/doc/<crate>.txt and print only "Generated output into
-          # ..." on stdout. Older ones print the table itself. Parsing
-          # stdout unconditionally silently yielded an empty total, and
-          # the gate then failed with "Example coverage is ;" while
-          # coverage was in fact 100% — a broken parse reported as a
-          # coverage regression. Prefer the file when one is named.
-          report="$(printf '%s\n' "$output" \
-            | sed -n 's/.*Generated output into "\(.*\)".*/\1/p' | tail -1)"
-          if [ -n "${report}" ] && [ -f "${report}" ]; then
-            echo "Reading coverage table from ${report}"
-            output="$(cat "${report}")"
-          fi
+            # Nightlies from roughly 2026-08 write the coverage table to
+            # target/doc/<crate>.txt and print only "Generated output into
+            # ..." on stdout. Older ones print the table itself. Parsing
+            # stdout unconditionally silently yielded an empty total, and
+            # the gate then failed with "Example coverage is ;" while
+            # coverage was in fact 100% — a broken parse reported as a
+            # coverage regression. Prefer the file when one is named.
+            report="$(printf '%s\n' "$output" \
+              | sed -n 's/.*Generated output into "\(.*\)".*/\1/p' | tail -1)"
+            if [ -n "${report}" ] && [ -f "${report}" ]; then
+              echo "Reading coverage table from ${report}"
+              output="$(cat "${report}")"
+            fi
 
-          total="$(printf '%s\n' "$output" | awk '/^\| Total/ {print $(NF-1)}')"
-          if [ -z "${total}" ]; then
-            echo "::error::Could not parse the example-coverage table."
-            echo "::error::This is a parse failure, not a coverage result."
-            exit 1
-          fi
-          echo "Overall example coverage: ${total}"
-          if [ "${total}" != "100.0%" ]; then
-            echo "::error::Example coverage is ${total}; expected 100.0%"
-            exit 1
-          fi
+            total="$(printf '%s\n' "$output" | awk '/^\| Total/ {print $(NF-1)}')"
+            if [ -z "${total}" ]; then
+              echo "::error::Could not parse the example-coverage table."
+              echo "::error::This is a parse failure, not a coverage result."
+              exit 1
+            fi
+            echo "${crate} example coverage: ${total}"
+            if [ "${total}" != "100.0%" ]; then
+              echo "::error::${crate}: example coverage is ${total}; expected 100.0%"
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
 
   # Every version-bearing file must name Cargo.toml's version, so a tag
   # can never again ship with the previous one (see the script).
@@ -239,3 +246,41 @@ jobs:
         with:
           persist-credentials: false
       - run: ./scripts/release-preflight.sh
+
+  # staticweaver-core builds without std (issue #49): the cross-compile
+  # gates `make nostd` runs locally, with and without the json filter.
+  no-std:
+    name: no_std (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [thumbv7em-none-eabihf, wasm32-wasip2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo build -p staticweaver-core --no-default-features --target "${{ matrix.target }}"
+      - run: cargo build -p staticweaver-core --no-default-features --features json --target "${{ matrix.target }}"
+
+  # The WASI Preview 2 example (issue #50) builds as a wasm32-wasip2
+  # component. Build only: running it needs Wasmtime (see the header of
+  # crates/staticweaver-core/examples/wasi.rs).
+  wasi-example:
+    name: WASI Preview 2 example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo build -p staticweaver-core --example wasi --target wasm32-wasip2 --release
+      - name: The component exists
+        run: test -s target/wasm32-wasip2/release/examples/wasi.wasm

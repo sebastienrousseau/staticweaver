@@ -16,7 +16,7 @@
 /// Polymorphic key-value `Context` and the `Value` enum (`Null`,
 /// `Bool`, `Number`, `String`, `List`, `Map`) that templates substitute.
 /// Supports dot-notation lookup via [`context::Context::get_path`].
-pub mod context;
+pub use staticweaver_core::context;
 
 /// The [`engine::Engine`] struct: template parser, expression
 /// evaluator, partial loader, inheritance resolver, filter pipeline,
@@ -25,7 +25,7 @@ pub mod engine;
 
 /// Error types ([`error::EngineError`] and [`error::TemplateError`])
 /// returned by every fallible operation in the crate.
-pub mod error;
+pub use staticweaver_core::error;
 
 /// Generic time-bounded LRU cache with TTL expiration. Used by
 /// [`engine::Engine::render_page`] to memoise rendered pages.
@@ -41,7 +41,14 @@ mod transport;
 /// [`loader_async::TokioFsLoader`] impl (under `async-tokio`).
 #[cfg(feature = "async")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
-pub mod loader_async;
+pub use staticweaver_async as loader_async;
+
+/// Filesystem-watching loader (issue #52). Gated behind the `watch`
+/// feature: [`watch::WatchLoader`] wraps any loader, caches its
+/// templates, and invalidates them on debounced change events.
+#[cfg(feature = "watch")]
+#[cfg_attr(docsrs, doc(cfg(feature = "watch")))]
+pub mod watch;
 
 pub use context::Context;
 pub use engine::Engine;

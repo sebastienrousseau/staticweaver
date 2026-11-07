@@ -1,284 +1,51 @@
 # -----------------------------------------------------------------------------
-# Static Weaver - A powerful and flexible static site generator and templating engine for Rust.
+# Static Weaver workspace (issue #48).
+#
+#   crates/staticweaver-core   parser, AST, escape, Value, errors (no_std + alloc)
+#   crates/staticweaver        std facade: Engine, FsLoader, cache, remote templates
+#   crates/staticweaver-async  AsyncTemplateLoader + Tokio loader
+#   crates/staticweaver-cli    the `staticweaver` binary
+#
+# `cargo add staticweaver` still gives the same library API: the facade
+# re-exports the core types at their old paths.
 # -----------------------------------------------------------------------------
 
-[package]
-# General project metadata
-name = "staticweaver"                       # The name of the library
-version = "0.0.9"                           # Current version of the crate (in-development)
-authors = ["StaticWeaver Contributors"]     # Library contributors
-edition = "2021"                            # Rust edition being used
-rust-version = "1.89"                       # MSRV: one floor shared with the maintainer's other Rust crates (raised from 1.75 in v0.0.8). The optional `async` feature's AFIT `AsyncTemplateLoader` alone needs 1.75.
-license = "MIT OR Apache-2.0"               # Dual licensing strategy
-description = """
-Small, safe, fast templating engine for Rust. Mustache-compatible \
-syntax with Tera-style expressions, inheritance with super(), 23 \
-built-in filters, custom filters/tests, pluggable loaders, idempotent \
-HTML escape, line:col error messages, zero unsafe code.
-"""                                         # Short library description
-homepage = "https://staticweaver.com/"             # Project's homepage URL
-documentation = "https://staticweaver.com/documentation/index.html" # Doc URL
-repository = "https://github.com/sebastienrousseau/staticweaver"    # Repository URL
-readme = "README.md"                        # Path to the readme file
-
-# -----------------------------------------------------------------------------
-# Crate Configuration
-# -----------------------------------------------------------------------------
-
-# Crates.io categories
-categories = [
-    "data-structures",
-    "parsing",
-    "encoding",
-    "web-programming",
-    "development-tools"
+[workspace]
+resolver = "2"
+members = [
+    "crates/staticweaver-core",
+    "crates/staticweaver-async",
+    "crates/staticweaver",
+    "crates/staticweaver-cli",
 ]
 
-# Keywords for easier discoverability on Crates.io
-keywords = ["cli", "generator", "site", "ssg", "static"]
+[workspace.package]
+version = "0.0.10"
+authors = ["StaticWeaver Contributors"]
+edition = "2021"
+# MSRV: one floor shared with the maintainer's other Rust crates (raised
+# from 1.75 in v0.0.8). The optional async surface (AFIT) alone needs 1.75.
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+homepage = "https://staticweaver.com/"
+repository = "https://github.com/sebastienrousseau/staticweaver"
 
-# Excluding unnecessary files from the package
-exclude = [
-    "/.git/*",                              # Exclude version control files
-    "/.github/*",                           # Exclude GitHub workflows
-    "/.gitignore",                          # Ignore Git ignore file
-    "/.vscode/*"                            # Ignore VSCode settings
-]
-
-# Disable cargo's autodiscovery so `examples/support.rs` (a shared helper
-# module, not a binary) is not compiled as an example on its own. The
-# real examples are listed explicitly in the `[[example]]` tables below.
-autoexamples = false
-
-# -----------------------------------------------------------------------------
-# Library Information
-# -----------------------------------------------------------------------------
-
-[lib]
-# Library-specific settings
-name = "staticweaver"                   # Internal name of the library
-path = "src/lib.rs"                     # Path to the library entry point
+# Internal crates are pinned to the exact workspace version so the four
+# crates always release in lockstep.
+[workspace.dependencies]
+staticweaver-core = { path = "crates/staticweaver-core", version = "=0.0.10", default-features = false }
+staticweaver-async = { path = "crates/staticweaver-async", version = "=0.0.10" }
+staticweaver = { path = "crates/staticweaver", version = "=0.0.10" }
 
 # -----------------------------------------------------------------------------
-# Binary
+# Linting Configuration (shared by every member via `[lints] workspace = true`)
 # -----------------------------------------------------------------------------
-[[bin]]
-# Lightweight CLI for rendering templates from the shell. Hand-rolled
-# arg parsing — no clap dep — so `cargo install staticweaver`
-# produces a small, dep-light binary alongside the library.
-name = "staticweaver"
-path = "src/bin/staticweaver.rs"
-
-# -----------------------------------------------------------------------------
-# Features
-# -----------------------------------------------------------------------------
-[features]
-# Optional features that can be enabled or disabled.
-default = []                                # No default features enabled
-remote-templates = ["dep:reqwest", "dep:tempfile"] # Fetch templates over HTTP/S via create_template_folder
-
-# Pulls in axum + tokio so `examples/axum.rs` compiles. Opt-in
-# because the underlying deps are heavy and not needed for the
-# library itself. Run with:
-#   cargo run --example axum --features axum-example
-axum-example = ["dep:axum", "dep:tokio"]
-
-# Enables the `{{ value | json }}` filter for serialising context
-# values as JSON. Pulls serde_json — kept opt-in so dep-light
-# default builds stay dep-light.
-json = ["dep:serde_json"]
-
-# Emits `tracing` spans on the render hot path — render_page,
-# render_template — so users wiring tracing_subscriber / opentelemetry
-# get visibility without bolting on shims. Opt-in (issue #39) so the
-# default dep tree stays at five direct deps.
-tracing = ["dep:tracing"]
-
-# Async trait surface (issue #37). Exposes AsyncTemplateLoader and
-# Engine::{render_template_async, render_page_async, render_to_async}.
-# Uses async fn in traits (AFIT, stable since 1.75 — see MSRV bump).
-# Runtime-agnostic at this layer — bring your own executor.
-async = []
-
-# Default async impl: TokioFsLoader backed by tokio::fs (issue #37).
-# Implies `async`. Pulls in tokio with minimal features (rt-multi-thread
-# + fs); zero weight on default builds.
-async-tokio = ["async", "dep:tokio"]
-
-# -----------------------------------------------------------------------------
-# Development Dependencies
-# -----------------------------------------------------------------------------
-[dev-dependencies]
-# Dependencies required for testing and development.
-criterion = "0.8"                           # Benchmarking library to test performance
-tempfile = "3.13"
-# mockito powers the remote-templates integration tests: it boots a real
-# HTTP server on a random localhost port so `reqwest::blocking` exercises
-# the actual wire path (status codes, Content-Type, body limits) without
-# depending on a live network.
-mockito = "1"
-
-# Comparative benchmarks. Pulled in only for `cargo bench --bench
-# comparative` so they don't bloat ordinary test builds. All three are
-# runtime / compile-time templating engines we measure ourselves against
-# to keep performance claims honest.
-tera = { version = "2", default-features = false }
-minijinja = "3"
-askama = { version = "0.16", default-features = false, features = ["derive", "std", "urlencode"] }
-
-# proptest powers the random-template robustness suite in
-# tests/proptest_parser.rs — every parser code path must NEVER panic
-# on arbitrary input, only return a clean EngineError.
-proptest = "1"
-
-# -----------------------------------------------------------------------------
-# Dependencies
-# -----------------------------------------------------------------------------
-[dependencies]
-# Required dependencies for building and running the project.
-
-fnv = "1.0"                                 # Fast non-cryptographic hash function
-
-# euxis-commons `path`: the maintainer's shared rule for joining an
-# untrusted template name under the template root (no dependencies).
-euxis-commons = { version = "0.0.9", default-features = false, features = ["path"] }
-
-# reqwest powers the optional remote-template fetcher. Gated behind the
-# `remote-templates` feature so the core crate has no networking code in
-# its default build. rustls + native-roots avoids pulling OpenSSL.
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "rustls-native-certs"], optional = true }
-
-# axum + tokio: used by examples/axum.rs (axum-example feature) AND
-# by the AsyncTemplateLoader TokioFsLoader impl (async-tokio feature).
-# tokio features below are the union — when only async-tokio is on, the
-# net/macros bits are dead code that LTO strips.
-axum = { version = "0.8", optional = true }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "fs"], optional = true }
-
-# serde_json: only used by the `json` filter, gated behind the
-# `json` feature. Default build has no JSON dep.
-serde_json = { version = "1", optional = true }
-
-# tempfile is used to create temporary directories for the remote-template
-# fetcher. Still needed at runtime for the feature-gated download path.
-tempfile = { version = "3.13", optional = true }
-
-# thiserror provides the derive macro for error types.
-thiserror = "2.0"
-
-# tracing: gated behind the `tracing` feature. Adds `#[instrument]`
-# spans on render_page / render_template / apply_filter so callers
-# can wire tracing_subscriber / opentelemetry without writing
-# a shim. Zero weight to default builds because it's optional.
-tracing = { version = "0.1", default-features = false, features = ["std", "attributes"], optional = true }
-
-# -----------------------------------------------------------------------------
-# Examples
-# -----------------------------------------------------------------------------
-# Each example uses `#[path = "support.rs"] mod support;` to pull in a
-# shared spinner/checkmark helper. The pattern, naming (one-word file
-# name) and structure match the style used across sebastienrousseau/*
-# crates (e.g. `noyalib/examples`).
-[[example]]
-name = "hello"
-path = "examples/hello.rs"
-
-[[example]]
-name = "context"
-path = "examples/context.rs"
-
-[[example]]
-name = "cache"
-path = "examples/cache.rs"
-
-[[example]]
-name = "engine"
-path = "examples/engine.rs"
-
-[[example]]
-name = "errors"
-path = "examples/errors.rs"
-
-[[example]]
-# Gated behind `remote-templates`; without the feature the example
-# prints a hint telling the user how to enable it.
-name = "remote"
-path = "examples/remote.rs"
-
-[[example]]
-# Drops staticweaver into a minimal Axum web server so the
-# integration recipe is testable end-to-end. Opt-in because axum +
-# tokio are heavy. Run with:
-#   cargo run --example axum --features axum-example
-name = "axum"
-path = "examples/axum.rs"
-required-features = ["axum-example"]
-
-[[example]]
-# Async render via Tokio (issues #37 + #38). Demonstrates
-# AsyncTemplateLoader, render_template_async, render_page_async,
-# render_to_async (AsyncWrite sink), and Arc<Engine> fan-out across
-# tokio tasks.
-name = "async_tokio"
-path = "examples/async_tokio.rs"
-required-features = ["async-tokio"]
-
-[[example]]
-# {{#extends}} + {{#block}} + {{ super() }} showcase. Uses
-# MemoryLoader so the example is self-contained.
-name = "inheritance"
-path = "examples/inheritance.rs"
-
-[[example]]
-# Built-in + custom filter / test pipeline showcase.
-name = "filters"
-path = "examples/filters.rs"
-
-[[example]]
-# FsLoader / MemoryLoader / a custom hot-mutable loader
-# implementing TemplateLoader directly.
-name = "loaders"
-path = "examples/loaders.rs"
-
-[[example]]
-# Expression language + #each / range / break / continue / set.
-name = "control_flow"
-path = "examples/control_flow.rs"
-
-# -----------------------------------------------------------------------------
-# Criterion Benchmark
-# -----------------------------------------------------------------------------
-[[bench]]
-# Benchmarking configuration for performance testing.
-name = "template_benchmark"                   # Name of the benchmark
-harness = false                             # Disable the default benchmark harness (used by Criterion)
-
-[[bench]]
-# Comparative matrix vs Tera, Minijinja, and Askama. Uses the same
-# Criterion harness; produces one comparison group per workload so
-# `cargo bench --bench comparative` prints all four engines side by side.
-name = "comparative"
-path = "benches/comparative.rs"
-harness = false
-
-# -----------------------------------------------------------------------------
-# Documentation Configuration
-# -----------------------------------------------------------------------------
-[package.metadata.docs.rs]
-# Settings for building and hosting documentation on docs.rs.
-all-features = true                         # Build documentation with all features enabled
-rustdoc-args = ["--cfg", "docsrs"]          # Arguments passed to `rustdoc` when building the documentation
-targets = ["x86_64-unknown-linux-gnu"]      # Default target platform for the docs
-
-# -----------------------------------------------------------------------------
-# Linting Configuration
-# -----------------------------------------------------------------------------
-[lints.rust]
+[workspace.lints.rust]
 # Linting rules for the project.
 
 ## Allowed cfg flags
 # `kani` is set by `cargo kani` (the bounded model checker, issue #43);
-# the proof harness in src/engine.rs is gated behind it. Without this
+# the proof harness in crates/staticweaver-core/src/escape.rs is gated behind it. Without this
 # entry rustc would warn `unexpected_cfgs` on every ordinary build.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
@@ -330,12 +97,16 @@ variant_size_differences = "deny"           # Deny enum variants with significan
 # contributors see where to add lints. Pedantic/nursery are intentionally
 # left off — they generate churn that belongs in a follow-up rather than
 # red-lining CI on every `-D warnings` build.
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 module_inception = "allow"
 module_name_repetitions = "allow"
 missing_docs_in_private_items = "allow"
 too_many_arguments = "allow"
+
+# -----------------------------------------------------------------------------
+# Profiles
+# -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
 # Profiles
