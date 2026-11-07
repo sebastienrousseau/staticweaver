@@ -39,15 +39,18 @@ Rationale as recorded in the repository:
   Handlebars and Askama.
 - The `Cargo.toml` package `description` ends "zero unsafe code".
 
-Why `forbid` was chosen over `deny`: Rationale not recorded;
-maintainer to confirm.
+Why `forbid` was chosen over `deny` (maintainer, 2026-11-07): unlike
+`deny`, `forbid` cannot be overridden by an inner
+`#[allow(unsafe_code)]`, so no one can quietly opt out.
 
 ### Escape valve
 
 `forbid` cannot be overridden by an item-level `#[allow]`, so there
 is no in-crate escape valve. No policy for a future exception (for
-example a separate crate holding audited `unsafe`) is recorded.
-Rationale not recorded; maintainer to confirm.
+example a separate crate holding audited `unsafe`) was recorded
+before v0.0.11. The policy (maintainer, 2026-11-07): `unsafe` is
+allowed only in a separate, audited crate, and never in
+`staticweaver-core`.
 
 `PERFORMANCE.md` ("† `escape_heavy`: about the path change") scopes
 a custom AVX2/NEON escape for a later release "if benchmarks justify
@@ -56,8 +59,9 @@ branch adds `std::arch`, `core::arch`, `target_feature` or
 `is_x86_feature_detected` (`git log --all -S`, checked 2026-11-07
 at `209dd2e`), and no issue or pull request proposes it beyond #33
 and #34, so the conflict has not arisen in practice (see ADR-006).
-How it would coexist with this decision if attempted is not
-recorded; maintainer to confirm.
+If attempted (maintainer, 2026-11-07), a SIMD escape is allowed only
+under the policy above: in a separate audited crate, behind a
+feature flag, with a safe fallback, and never in `staticweaver-core`.
 
 ## Consequences
 

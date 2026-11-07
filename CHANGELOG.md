@@ -36,8 +36,14 @@ called out explicitly below).
   `cargo bench --bench comparative` at v0.0.2, `4f7469d`, `19f6be9`,
   v0.0.3 and v0.0.10, and records that the AVX2/NEON escape was
   never attempted. ADR-004 cites #48 for not keeping one crate.
-  ADR-001 and ADR-002 gain the history and line counts behind their
-  remaining questions, which stay open.
+  The rest are answered by the maintainer: ADR-001 records why
+  `forbid` (no inner `#[allow]` can opt out) and that `unsafe`, a
+  SIMD escape included, may only live in a separate audited crate
+  behind a feature flag, never in `staticweaver-core`; ADR-002 keeps
+  the measured 2.5–3.8× gap, marks the 15–30% and ~1500 LoC figures
+  as unmeasured estimates (the 15–30% claim leaves `PERFORMANCE.md`)
+  and measures the "small" pillar on the core crate (~4.9k lines);
+  ADR-005 names both threats SHA pinning stops. No item is left open.
 - README "Project metrics": the source size is now measured on the
   four-crate workspace (~13.7k lines, `staticweaver-core` ~4.9k
   without unit tests); the old figure named modules that no longer

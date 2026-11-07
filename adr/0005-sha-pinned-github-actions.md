@@ -36,9 +36,10 @@ returned none.
 Rationale as recorded: the change is filed under issue #51, labelled
 `type:security` and `type:supply-chain`, and the comment format keeps
 Dependabot updates working (#51; `CHANGELOG.md` `[0.0.9]`). The
-threat that pinning addresses (for example a moved or rewritten tag)
-is not written down in the repository. Rationale not recorded;
-maintainer to confirm.
+threat it addresses (maintainer, 2026-11-07) is both a moved or
+rewritten tag and a compromised upstream: a retagged action has no
+effect at all, and a compromised upstream only reaches the
+repository through a SHA bump that is reviewed.
 
 ## Consequences
 

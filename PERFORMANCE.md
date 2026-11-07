@@ -119,9 +119,9 @@ churn.
 A compiled bytecode + interpreter (the path Minijinja takes) would
 likely close the remaining 2.5–3.5× gap on `#each` and `if_chain`
 workloads. It was scoped as Phase D Option 1 and explicitly
-rejected — the marginal gain (15–30% on hot workloads) doesn't
-justify ~1500 LoC of compiler + VM that breaks the "small" pillar
-in our positioning vs Tera and Minijinja. If you need bytecode-VM
+rejected: a compiler + VM, estimated (not measured) at ~1500 LoC,
+would break the "small" pillar (the core engine, ~4.9k lines) in our
+positioning vs Tera and Minijinja. If you need bytecode-VM
 performance, use Minijinja directly.
 
 ## How to run the benchmarks yourself

@@ -45,13 +45,13 @@ Both figures first appear in `PERFORMANCE.md` as added by `20cffe0`
 request (#5) records a prototype, a measurement or an estimating
 method. No other commit, issue or PR discusses a bytecode VM, apart
 from this ADR's own backfill (#54); other matches for "bytecode" are
-the `bytecode-alliance` cargo-vet import. How the 15–30% gain and
-the ~1500 LoC figure were estimated: Measurement not recorded;
-maintainer to confirm. The same paragraph,
-in the same commit, also says a VM "would likely close the remaining
-2.5–3.5× gap", which does not obviously agree with a 15–30% gain;
-since both were written together, history cannot say which is
-current; maintainer to confirm.
+the `bytecode-alliance` cargo-vet import. The 15–30% gain and the ~1500 LoC figure were an estimate, not
+measured (maintainer, 2026-11-07). The same paragraph also said a VM
+"would likely close the remaining 2.5–3.5× gap"; that gap is the
+measured one (the `PERFORMANCE.md` benchmark table shows −2.5× on
+`each_100` and −3.8× on `if_chain` against Askama), so it is the
+figure kept, and the unmeasured 15–30% claim is dropped from
+`PERFORMANCE.md`.
 
 Option 3 was also skipped: per-call `parse_expr` cost is "sub-200ns",
 and caching it needed either a breaking `&mut self` API or a
@@ -75,9 +75,9 @@ and caching it needed either a breaking `&mut self` API or a
   | `crates/staticweaver-core/src/*.rs` at `209dd2e`, excluding `unit_tests.rs` | 4,930 |
   | `crates/*/src/**/*.rs` at `209dd2e`, all four crates | 13,729 |
 
-  Only the core crate, as split in v0.0.10, matches "~5k". Which
-  scope the pillar is measured against is not recorded;
-  maintainer to confirm.
+  Only the core crate, as split in v0.0.10, matches "~5k". The
+  "small" pillar means the engine is small, so it is measured on
+  `staticweaver-core`: ~4.9k lines (maintainer, 2026-11-07).
 - Constant-factor work continues instead (D2 to D6, #33).
 
 ## More Information

@@ -2,8 +2,9 @@
 
 Decisions that shape staticweaver, in the
 [MADR](https://adr.github.io/madr/) format. Each record cites the
-file, section or commit its claims come from; anything without
-evidence in the repository is marked "maintainer to confirm".
+file, section or commit its claims come from; claims without
+evidence in the repository were confirmed by the maintainer on
+2026-11-07 and are marked "(maintainer, 2026-11-07)".
 
 | ADR | Title | Status | File |
 | :--- | :--- | :--- | :--- |
