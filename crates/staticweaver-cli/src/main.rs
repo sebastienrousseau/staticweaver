@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! USAGE
-//!   staticweaver render <template> [--set key=value ...] [--no-escape]
+//!   staticweaver render <template> [--set key=value ...] [--no-escape] [--watch]
 //!   staticweaver --help
 //!   staticweaver --version
 //!
@@ -15,12 +15,15 @@
 //! OPTIONS
 //!   --set KEY=VALUE     Set a context binding. Repeatable.
 //!   --no-escape         Disable HTML escape.
+//!   --watch             Re-render whenever the template or anything
+//!                       under its directory changes. Ctrl-C stops.
 //!   --help, -h          Print this message.
 //!   --version, -V       Print the binary version.
 //!
 //! EXAMPLES
 //!   staticweaver render hello.html --set name=Ada
 //!   echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
+//!   staticweaver render page.html --set name=Ada --watch
 //! ```
 //!
 //! Hand-rolled arg parsing — no `clap` dep, so the binary stays
@@ -29,6 +32,8 @@
 
 #![forbid(unsafe_code)]
 #![allow(missing_docs)]
+
+mod watch;
 
 use staticweaver::{Context, Engine};
 use std::io::Read;
@@ -39,7 +44,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const HELP: &str = "\
 USAGE
-  staticweaver render <template> [--set key=value ...] [--no-escape]
+  staticweaver render <template> [--set key=value ...] [--no-escape] [--watch]
   staticweaver --help
   staticweaver --version
 
@@ -49,12 +54,15 @@ ARGS
 OPTIONS
   --set KEY=VALUE     Set a context binding. Repeatable.
   --no-escape         Disable HTML escape.
+  --watch             Re-render whenever the template or anything
+                      under its directory changes. Ctrl-C stops.
   --help, -h          Print this message.
   --version, -V       Print the binary version.
 
 EXAMPLES
   staticweaver render hello.html --set name=Ada
   echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
+  staticweaver render page.html --set name=Ada --watch
 ";
 
 /// Outcome of `dispatch` — used by both the binary's `main` and the
@@ -74,6 +82,7 @@ struct RenderArgs {
     template_arg: Option<String>,
     sets: Vec<(String, String)>,
     no_escape: bool,
+    watch: bool,
 }
 
 fn main() -> ExitCode {
@@ -104,6 +113,9 @@ fn run<R: Read, O: std::io::Write, E: std::io::Write>(
     stdout: &mut O,
     stderr: &mut E,
 ) -> u8 {
+    if let Some(parsed) = watch_request(&args) {
+        return watch::run(&parsed, stdout, stderr);
+    }
     let out = dispatch(&args, stdin);
     if !out.stdout.is_empty() {
         let _ = stdout.write_all(out.stdout.as_bytes());
@@ -165,40 +177,57 @@ fn dispatch<R: Read>(
     }
 }
 
+/// `render ... --watch` with otherwise valid arguments. Anything else
+/// (including a malformed `--watch` command line) goes through
+/// `dispatch`, which reports the error.
+fn watch_request(args: &[String]) -> Option<RenderArgs> {
+    if args.first().map(String::as_str) != Some("render") {
+        return None;
+    }
+    parse_render_args(&args[1..])
+        .ok()
+        .filter(|parsed| parsed.watch)
+}
+
 fn parse_render_args(args: &[String]) -> Result<RenderArgs, String> {
     let mut out = RenderArgs::default();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--set" => {
-                let pair = args.get(i + 1).ok_or_else(|| {
-                    "--set requires a KEY=VALUE argument".to_string()
-                })?;
-                let (k, v) = pair.split_once('=').ok_or_else(|| {
-                    format!("--set expected KEY=VALUE, got `{pair}`")
-                })?;
-                out.sets.push((k.to_string(), v.to_string()));
-                i += 2;
-            }
-            "--no-escape" => {
-                out.no_escape = true;
-                i += 1;
-            }
-            // `-` alone means "read template from stdin" — not an
-            // option flag. Anything else starting with `-` is.
-            other
-                if (other == "-" || !other.starts_with('-'))
-                    && out.template_arg.is_none() =>
-            {
-                out.template_arg = Some(other.to_string());
-                i += 1;
-            }
-            other => {
-                return Err(format!("unknown arg `{other}`"));
-            }
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--set" => out.sets.push(parse_set(rest.next())?),
+            "--no-escape" => out.no_escape = true,
+            "--watch" => out.watch = true,
+            other => out.take_template(other)?,
         }
     }
     Ok(out)
+}
+
+/// The `KEY=VALUE` operand of `--set`.
+fn parse_set(arg: Option<&String>) -> Result<(String, String), String> {
+    let pair = arg.ok_or_else(|| {
+        "--set requires a KEY=VALUE argument".to_string()
+    })?;
+    let (k, v) = pair.split_once('=').ok_or_else(|| {
+        format!("--set expected KEY=VALUE, got `{pair}`")
+    })?;
+    Ok((k.to_string(), v.to_string()))
+}
+
+impl RenderArgs {
+    /// Takes `arg` as the template operand. `-` alone means "read the
+    /// template from stdin", not an option flag; anything else
+    /// starting with `-`, or a second operand, is an unknown arg.
+    fn take_template(&mut self, arg: &str) -> Result<(), String> {
+        if (arg == "-" || !arg.starts_with('-'))
+            && self.template_arg.is_none()
+        {
+            self.template_arg = Some(arg.to_string());
+            Ok(())
+        } else {
+            Err(format!("unknown arg `{arg}`"))
+        }
+    }
 }
 
 fn cmd_render<R: Read>(
@@ -223,16 +252,22 @@ fn cmd_render<R: Read>(
         })?
     };
 
-    let mut ctx = Context::new();
-    for (k, v) in parsed.sets {
-        ctx.set(k, v);
-    }
+    let ctx = context_from(&parsed.sets);
 
     let engine = Engine::new("", Duration::from_secs(60))
         .with_html_escape(!parsed.no_escape);
     engine
         .render_template(&template, &ctx)
         .map_err(|e| format!("render: {e}"))
+}
+
+/// The render context built from `--set` pairs.
+fn context_from(sets: &[(String, String)]) -> Context {
+    let mut ctx = Context::new();
+    for (k, v) in sets {
+        ctx.set(k.clone(), v.clone());
+    }
+    ctx
 }
 
 // ─── Unit tests ─────────────────────────────────────────────────────
@@ -244,255 +279,4 @@ fn cmd_render<R: Read>(
 // Both layers are kept.
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Cursor;
-
-    fn s(args: &[&str]) -> Vec<String> {
-        args.iter().map(|a| (*a).to_string()).collect()
-    }
-
-    #[test]
-    fn empty_args_emits_help_with_exit_2() {
-        let out = dispatch(&[], &mut Cursor::new(Vec::new()));
-        assert_eq!(out.exit, 2);
-        assert!(out.stderr.contains("USAGE"));
-        assert!(out.stdout.is_empty());
-    }
-
-    #[test]
-    fn help_long_short_and_subcommand_form() {
-        for arg in ["--help", "-h", "help"] {
-            let out =
-                dispatch(&s(&[arg]), &mut Cursor::new(Vec::new()));
-            assert_eq!(out.exit, 0);
-            assert!(out.stdout.contains("USAGE"));
-            assert!(out.stderr.is_empty());
-        }
-    }
-
-    #[test]
-    fn version_long_and_short() {
-        for arg in ["--version", "-V"] {
-            let out =
-                dispatch(&s(&[arg]), &mut Cursor::new(Vec::new()));
-            assert_eq!(out.exit, 0);
-            assert!(out.stdout.contains("staticweaver"));
-            assert!(out.stdout.contains(VERSION));
-        }
-    }
-
-    #[test]
-    fn unknown_subcommand_errors_with_exit_2() {
-        let out = dispatch(&s(&["nope"]), &mut Cursor::new(Vec::new()));
-        assert_eq!(out.exit, 2);
-        assert!(out.stderr.contains("unknown subcommand"));
-    }
-
-    #[test]
-    fn render_with_stdin_template_and_set() {
-        let out = dispatch(
-            &s(&["render", "-", "--set", "name=Ada"]),
-            &mut Cursor::new(b"Hi {{name}}!".to_vec()),
-        );
-        assert_eq!(out.exit, 0);
-        assert_eq!(out.stdout, "Hi Ada!");
-    }
-
-    #[test]
-    fn render_with_no_escape_emits_raw_html() {
-        let out = dispatch(
-            &s(&["render", "-", "--no-escape", "--set", "x=<b>"]),
-            &mut Cursor::new(b"{{x}}".to_vec()),
-        );
-        assert_eq!(out.exit, 0);
-        assert_eq!(out.stdout, "<b>");
-    }
-
-    #[test]
-    fn render_default_escapes_html() {
-        let out = dispatch(
-            &s(&["render", "-", "--set", "x=<b>"]),
-            &mut Cursor::new(b"{{x}}".to_vec()),
-        );
-        assert_eq!(out.exit, 0);
-        assert_eq!(out.stdout, "&lt;b&gt;");
-    }
-
-    #[test]
-    fn render_from_file_path() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("t.html");
-        std::fs::write(&path, "<h1>{{title}}</h1>").unwrap();
-        let out = dispatch(
-            &s(&[
-                "render",
-                path.to_str().unwrap(),
-                "--set",
-                "title=Hi",
-            ]),
-            &mut Cursor::new(Vec::new()),
-        );
-        assert_eq!(out.exit, 0);
-        assert_eq!(out.stdout, "<h1>Hi</h1>");
-    }
-
-    #[test]
-    fn render_missing_template_arg_errors() {
-        let out =
-            dispatch(&s(&["render"]), &mut Cursor::new(Vec::new()));
-        assert_eq!(out.exit, 1);
-        assert!(out.stderr.contains("missing"));
-    }
-
-    #[test]
-    fn render_malformed_set_errors() {
-        let out = dispatch(
-            &s(&["render", "-", "--set", "no_equals"]),
-            &mut Cursor::new(Vec::new()),
-        );
-        assert_eq!(out.exit, 1);
-        assert!(out.stderr.contains("KEY=VALUE"));
-    }
-
-    #[test]
-    fn render_set_without_value_errors() {
-        let out = dispatch(
-            &s(&["render", "-", "--set"]),
-            &mut Cursor::new(Vec::new()),
-        );
-        assert_eq!(out.exit, 1);
-        assert!(out.stderr.contains("--set requires"));
-    }
-
-    #[test]
-    fn render_unknown_arg_errors() {
-        let out = dispatch(
-            &s(&["render", "-", "--never-heard-of"]),
-            &mut Cursor::new(Vec::new()),
-        );
-        assert_eq!(out.exit, 1);
-        assert!(out.stderr.contains("unknown arg"));
-    }
-
-    #[test]
-    fn render_template_error_propagates() {
-        let out = dispatch(
-            &s(&["render", "-"]),
-            &mut Cursor::new(b"{{missing}}".to_vec()),
-        );
-        assert_eq!(out.exit, 1);
-        assert!(out.stderr.contains("missing"));
-    }
-
-    #[test]
-    fn render_nonexistent_file_errors() {
-        let out = dispatch(
-            &s(&["render", "/nonexistent-staticweaver-cli-path"]),
-            &mut Cursor::new(Vec::new()),
-        );
-        assert_eq!(out.exit, 1);
-        assert!(out.stderr.contains("reading template"));
-    }
-
-    #[test]
-    fn parse_render_args_roundtrips_clean_input() {
-        let parsed = parse_render_args(&s(&[
-            "t.html",
-            "--set",
-            "a=1",
-            "--no-escape",
-            "--set",
-            "b=2",
-        ]))
-        .unwrap();
-        assert_eq!(parsed.template_arg.as_deref(), Some("t.html"));
-        assert_eq!(
-            parsed.sets,
-            vec![
-                ("a".to_string(), "1".to_string()),
-                ("b".to_string(), "2".to_string())
-            ]
-        );
-        assert!(parsed.no_escape);
-    }
-
-    #[test]
-    fn parse_render_args_treats_dash_as_template() {
-        let parsed = parse_render_args(&s(&["-"])).unwrap();
-        assert_eq!(parsed.template_arg.as_deref(), Some("-"));
-    }
-
-    // ── run() entry point: covers main's terminal-write branches
-
-    #[test]
-    fn run_help_writes_to_stdout_and_exits_zero() {
-        let mut stdin = Cursor::new(Vec::<u8>::new());
-        let mut stdout: Vec<u8> = Vec::new();
-        let mut stderr: Vec<u8> = Vec::new();
-        let exit =
-            run(s(&["--help"]), &mut stdin, &mut stdout, &mut stderr);
-        assert_eq!(exit, 0);
-        let s_out = String::from_utf8(stdout).unwrap();
-        assert!(s_out.contains("USAGE"), "{s_out}");
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn run_unknown_subcommand_writes_to_stderr_with_exit_2() {
-        let mut stdin = Cursor::new(Vec::<u8>::new());
-        let mut stdout: Vec<u8> = Vec::new();
-        let mut stderr: Vec<u8> = Vec::new();
-        let exit =
-            run(s(&["nope"]), &mut stdin, &mut stdout, &mut stderr);
-        assert_eq!(exit, 2);
-        assert!(stdout.is_empty());
-        let s_err = String::from_utf8(stderr).unwrap();
-        assert!(s_err.contains("unknown subcommand"), "{s_err}");
-    }
-
-    #[test]
-    fn run_render_writes_template_output_to_stdout() {
-        let mut stdin = Cursor::new(b"Hi {{name}}!".to_vec());
-        let mut stdout: Vec<u8> = Vec::new();
-        let mut stderr: Vec<u8> = Vec::new();
-        let exit = run(
-            s(&["render", "-", "--set", "name=Ada"]),
-            &mut stdin,
-            &mut stdout,
-            &mut stderr,
-        );
-        assert_eq!(exit, 0);
-        assert_eq!(stdout, b"Hi Ada!");
-        assert!(stderr.is_empty());
-    }
-
-    #[test]
-    fn run_render_error_writes_to_stderr_with_exit_1() {
-        let mut stdin = Cursor::new(b"{{missing}}".to_vec());
-        let mut stdout: Vec<u8> = Vec::new();
-        let mut stderr: Vec<u8> = Vec::new();
-        let exit = run(
-            s(&["render", "-"]),
-            &mut stdin,
-            &mut stdout,
-            &mut stderr,
-        );
-        assert_eq!(exit, 1);
-        assert!(stdout.is_empty());
-        let s_err = String::from_utf8(stderr).unwrap();
-        assert!(s_err.contains("missing"), "{s_err}");
-    }
-
-    #[test]
-    fn run_empty_args_writes_help_to_stderr_with_exit_2() {
-        let mut stdin = Cursor::new(Vec::<u8>::new());
-        let mut stdout: Vec<u8> = Vec::new();
-        let mut stderr: Vec<u8> = Vec::new();
-        let exit = run(s(&[]), &mut stdin, &mut stdout, &mut stderr);
-        assert_eq!(exit, 2);
-        assert!(stdout.is_empty());
-        let s_err = String::from_utf8(stderr).unwrap();
-        assert!(s_err.contains("USAGE"), "{s_err}");
-    }
-}
+mod tests;

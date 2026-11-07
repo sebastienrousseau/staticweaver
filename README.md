@@ -298,7 +298,7 @@ A bare path like `{{#if user}}` keeps its truthiness semantics — it evaluates 
 | **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. **True LRU eviction** on overflow — `Cache::get` (`&mut self`) bumps access recency. Methods: `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. **Observability**: `CacheStats { inserts, hits, misses, evictions, ttl_expired }` via `Cache::stats()` for cheap export to prometheus / metrics / opentelemetry without forcing a dep choice. On the `Engine` the cache lives behind `std::sync::Mutex` so `render_page` can take `&self`. |
 | **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-native-certs`. HTTPS only (plain `http://` is accepted for loopback hosts alone, and never via a redirect). The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
 | **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). All user-facing messages carry `at line N, column M` for source positions. `TemplateError` with `#[from]` conversions for `io::Error` and `reqwest::Error`. |
-| **CLI** | `cargo install staticweaver-cli` ships a `staticweaver` binary: `staticweaver render <template> [--set k=v ...] [--no-escape]`. Reads templates from a file path or stdin (`-`). |
+| **CLI** | `cargo install staticweaver-cli` ships a `staticweaver` binary: `staticweaver render <template> [--set k=v ...] [--no-escape] [--watch]`. Reads templates from a file path or stdin (`-`); `--watch` re-renders on change. |
 | **Robustness** | proptest harness (256 random cases × 9 properties = ~2300 inputs per `cargo test`) proving the engine never panics on arbitrary input. Differential tests against Minijinja anchor the shared-syntax contract. Three nightly libfuzzer targets (`parse`, `escape`, `dot_path`) cover the bytes proptest misses. Two `#[cfg(kani)]` formal proofs against `escape_html_into` (idempotency + no bare metachars). |
 | **Supply chain** | `cargo deny` (advisories, bans, licenses, sources — yanked denied) + `cargo audit` (CVSS gate) + `osv-scanner` (GHSA + RUSTSEC + crates.io) + `cargo vet` (Mozilla / Google / bytecode-alliance / Embark imports). Release artifacts: CycloneDX + SPDX JSON SBOMs, cosign keyless OIDC signatures (Sigstore), all attached to the GitHub Release. |
 | **Observability** | `tracing` feature (opt-in) adds `#[tracing::instrument]` spans on `render_template` / `render_page` with template-length / layout / context.len fields. Wire to `tracing_subscriber`, `tracing-opentelemetry`, or any other consumer. |
@@ -736,7 +736,7 @@ staticweaver render hello.html --set name=Ada
 echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
 ```
 
-`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape. Errors exit non-zero.
+`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape. `--watch` re-renders to stdout whenever the template or anything under its directory changes (debounced, 200 ms) and stops cleanly on Ctrl-C (`staticweaver render hello.html --set name=Ada --watch`). Errors exit non-zero.
 
 </details>
 
@@ -1078,7 +1078,7 @@ staticweaver render hello.html --set name=Ada --set greeting=Hi
 echo 'Hi {{name}}!' | staticweaver render - --set name=Ada
 ```
 
-`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape.
+`<template>` is a file path or `-` for stdin. `--set KEY=VALUE` is repeatable. `--no-escape` disables HTML escape. `--watch` re-renders to stdout whenever the template or anything under its directory changes (debounced, 200 ms) and stops cleanly on Ctrl-C (`staticweaver render hello.html --set name=Ada --watch`).
 
 </details>
 

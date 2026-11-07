@@ -80,6 +80,15 @@ called out explicitly below).
   `generation()` cover manual use. Example: `examples/watch.rs`. The
   debounce logic is tested with synthetic events; two tests marked
   OS-dependent exercise the real platform watcher with 20 s timeouts.
+- **`staticweaver render <file> --watch`** (#53): renders once, then
+  re-renders to stdout whenever the template or anything under its
+  directory changes, with a `WatchLoader` as the engine's loader so
+  partials are cached until they change. Render errors are reported
+  and watching continues; Ctrl-C (SIGINT) stops it with exit 0.
+  `--watch` with stdin (`-`) is refused. The arg parser stays
+  hand-rolled (no clap); the CLI gains the `ctrlc` dependency for
+  the signal handler. Smoke tests (Unix) cover startup, a re-render
+  after an edit (OS-dependent), and clean shutdown on SIGINT.
 
 ## [0.0.9] - 2026-11-07
 

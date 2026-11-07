@@ -25,7 +25,10 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-staticweaver = { workspace = true }
+# `watch` powers `render --watch` (WatchLoader, issue #53).
+staticweaver = { workspace = true, features = ["watch"] }
+# Ctrl-C / SIGINT handler so `--watch` stops cleanly with exit 0.
+ctrlc = "3.5"
 
 [dev-dependencies]
 tempfile = "3.13"
