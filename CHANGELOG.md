@@ -28,6 +28,15 @@ called out explicitly below).
   FilterFn, TestFn}`, `staticweaver::loader_async`), so code written
   against 0.0.9 compiles unchanged. Internal dependencies are pinned
   to `=0.0.10`; the four crates release in lockstep.
+- **Release and CI follow the workspace.** The release workflow
+  publishes the four crates in dependency order (core, async,
+  staticweaver, cli), skipping any already on crates.io at the
+  version, and attaches a CycloneDX SBOM and a Sigstore-signed
+  `.crate` for each. CI adds a `no_std` cross-compile matrix
+  (`thumbv7em-none-eabihf`, `wasm32-wasip2`) and a WASI example
+  build, and checks doc-example coverage per library crate; the Kani
+  job targets `staticweaver-core`, where the proofs now live.
+  Dependabot drops its stale `askama_escape` ignore rule.
 - **The CLI moved to its own crate.** `cargo install staticweaver` no
   longer installs a binary; use `cargo install staticweaver-cli`. The
   binary is still called `staticweaver` and takes the same arguments.

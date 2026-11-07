@@ -16,6 +16,7 @@
   <a href="https://docs.rs/staticweaver"><img src="https://img.shields.io/badge/docs.rs-staticweaver-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" alt="Docs.rs" /></a>
   <a href="https://codecov.io/gh/sebastienrousseau/staticweaver"><img src="https://img.shields.io/codecov/c/github/sebastienrousseau/staticweaver?style=for-the-badge&logo=codecov" alt="Coverage" /></a>
   <a href="https://lib.rs/crates/staticweaver"><img src="https://img.shields.io/crates/v/staticweaver?style=for-the-badge&label=lib.rs&color=orange" alt="lib.rs" /></a>
+  <a href="https://github.com/sebastienrousseau/staticweaver/actions/workflows/ci.yml"><img src="https://img.shields.io/badge/WASI-Preview_2-654ff0?style=for-the-badge&logo=webassembly" alt="WASI Preview 2: the wasi example builds for wasm32-wasip2 in CI" /></a>
 </p>
 
 ---

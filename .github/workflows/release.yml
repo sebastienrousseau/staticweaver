@@ -5,7 +5,8 @@
 # not been updated to match.
 #
 # Before pushing a tag:
-#   1. Update the `version` field in Cargo.toml and land it on `main`.
+#   1. Update `[workspace.package] version` (and the `=x.y.z` internal
+#      pins) in the root Cargo.toml and land it on `main`.
 #   2. `git tag -s vX.Y.Z -m "release X.Y.Z"` then `git push --tags`.
 
 name: Release
@@ -85,15 +86,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       # Trusted publishing: swaps this job's GitHub OIDC identity for a
       # temporary crates.io token, revoked by the action's post step when
-      # the job ends. Needs a trusted publisher on crates.io for the
-      # staticweaver crate (repo + release.yml).
+      # the job ends. Needs a trusted publisher on crates.io (repo +
+      # release.yml) for each of the four workspace crates.
       - name: Authenticate with crates.io
         id: auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1
-      - name: cargo publish
+      - name: cargo publish (dependency order)
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish
+        # The workspace (issue #48) publishes four crates, in dependency
+        # order: core, async, staticweaver, cli. Internal dependencies
+        # are pinned to the exact version, and cargo publish waits until
+        # each crate is in the index before the next one resolves it. A
+        # crate already on crates.io at this version (a re-run after a
+        # partial publish) is skipped rather than failing the job.
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          for crate in staticweaver-core staticweaver-async staticweaver staticweaver-cli; do
+            if curl -sfL -A "staticweaver-release (https://github.com/sebastienrousseau/staticweaver)" \
+                "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+              echo "${crate} ${version} is already on crates.io; skipping"
+              continue
+            fi
+            cargo publish -p "${crate}"
+          done
 
   # SBOM generation + Sigstore keyless signing (issue #44). Runs after
   # the publish succeeded, so the artifacts we sign match what crates.io
@@ -127,12 +144,16 @@ jobs:
       - name: Install cargo-sbom (SPDX SBOM)
         run: cargo install --locked cargo-sbom
 
-      - name: Generate CycloneDX SBOM
+      - name: Generate CycloneDX SBOMs (one per crate)
+        # In a workspace cargo-cyclonedx writes crates/<crate>/bom.json.
         run: |
+          set -euo pipefail
           cargo cyclonedx --format json --override-filename bom
-          mv bom.json "staticweaver-${{ steps.ver.outputs.version }}.cdx.json"
+          for crate in staticweaver-core staticweaver-async staticweaver staticweaver-cli; do
+            mv "crates/${crate}/bom.json" "${crate}-${{ steps.ver.outputs.version }}.cdx.json"
+          done
 
-      - name: Generate SPDX SBOM
+      - name: Generate SPDX SBOM (whole workspace)
         run: |
           cargo sbom > "staticweaver-${{ steps.ver.outputs.version }}.spdx.json"
 
@@ -143,18 +164,20 @@ jobs:
         # SBOMs sitting alongside cannot reach the .crate artifact.
         # Without this flag v0.0.4's SBOM+Sigstore job failed even
         # though Publish to crates.io had already succeeded.
-        run: cargo package --no-verify --allow-dirty
+        run: cargo package --workspace --no-verify --allow-dirty
 
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
-      - name: Sign .crate via Sigstore (keyless OIDC)
+      - name: Sign each .crate via Sigstore (keyless OIDC)
         run: |
           set -euo pipefail
-          CRATE="target/package/staticweaver-${{ steps.ver.outputs.version }}.crate"
-          cosign sign-blob --yes \
-            --output-signature "${CRATE}.sig" \
-            --output-certificate "${CRATE}.cert" \
-            "${CRATE}"
+          for crate in staticweaver-core staticweaver-async staticweaver staticweaver-cli; do
+            CRATE="target/package/${crate}-${{ steps.ver.outputs.version }}.crate"
+            cosign sign-blob --yes \
+              --output-signature "${CRATE}.sig" \
+              --output-certificate "${CRATE}.cert" \
+              "${CRATE}"
+          done
 
       - name: Attach SBOM + signature to GitHub Release
         env:
@@ -175,10 +198,12 @@ jobs:
               --title "staticweaver ${GITHUB_REF_NAME#v}" \
               --generate-notes
           fi
-          gh release upload "$GITHUB_REF_NAME" \
-            "staticweaver-${{ steps.ver.outputs.version }}.cdx.json" \
-            "staticweaver-${{ steps.ver.outputs.version }}.spdx.json" \
-            "target/package/staticweaver-${{ steps.ver.outputs.version }}.crate" \
-            "target/package/staticweaver-${{ steps.ver.outputs.version }}.crate.sig" \
-            "target/package/staticweaver-${{ steps.ver.outputs.version }}.crate.cert" \
-            --clobber
+          v="${{ steps.ver.outputs.version }}"
+          assets=("staticweaver-${v}.spdx.json")
+          for crate in staticweaver-core staticweaver-async staticweaver staticweaver-cli; do
+            assets+=("${crate}-${v}.cdx.json"
+                     "target/package/${crate}-${v}.crate"
+                     "target/package/${crate}-${v}.crate.sig"
+                     "target/package/${crate}-${v}.crate.cert")
+          done
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
