@@ -51,7 +51,12 @@ Rationale not recorded; maintainer to confirm.
 
 `PERFORMANCE.md` ("† `escape_heavy`: about the path change") scopes
 a custom AVX2/NEON escape for a later release "if benchmarks justify
-the complexity". How that would coexist with this decision is not
+the complexity". No such escape was ever written: no commit on any
+branch adds `std::arch`, `core::arch`, `target_feature` or
+`is_x86_feature_detected` (`git log --all -S`, checked 2026-11-07
+at `209dd2e`), and no issue or pull request proposes it beyond #33
+and #34, so the conflict has not arisen in practice (see ADR-006).
+How it would coexist with this decision if attempted is not
 recorded; maintainer to confirm.
 
 ## Consequences

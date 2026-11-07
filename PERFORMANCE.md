@@ -61,6 +61,8 @@ A full SIMD recovery (custom AVX2/NEON `<>&"'` mask with entity
 lookahead) is scoped for v0.0.4 if benchmarks justify the
 complexity. The v0.0.3 scalar path is the right cost/benefit for a
 patch release: ~50 LOC, no new dependency, idempotency guaranteed.
+(As of v0.0.10 the SIMD recovery has not been attempted; see
+[ADR-006](adr/0006-drop-askama-escape.md).)
 
 ## Phase D progression
 

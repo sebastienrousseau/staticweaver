@@ -53,11 +53,45 @@ macOS 26.5.1, rustc 1.95.0, release profile `lto = true`,
 `opt-level = "z"` (`PERFORMANCE.md`, "Headline numbers" and
 "Hardware and toolchain"). `4f7469d` states "benchmarks unchanged in
 noise" for the intermediate scan, while `CHANGELOG.md` `[0.0.3]`
-reports a 3.4× regression for it; maintainer to confirm which is
-correct.
+reports a 3.4× regression for it. The regression is the correct
+account. Issue #33 was opened to benchmark `4f7469d` and `19f6be9`,
+and its closing comment records "regressed to 78.3 µs (3.4× over the
+23.3 µs SIMD baseline)"; 78.3 / 23.3 = 3.36.
 
-Whether option 3 was ever attempted after v0.0.4: Rationale not
-recorded; maintainer to confirm. ADR-001 constrains it.
+A re-run on 2026-11-07 agrees on the direction. Each revision was
+checked out in a temporary `git worktree`, built with its own
+`Cargo.lock` (`cargo bench --locked --bench comparative --no-run`),
+and its bench binary run as `<binary> --bench --noplot
+--warm-up-time 2 --measurement-time 5 escape_heavy`, three rounds
+interleaved across revisions. Machine: Apple A18 Pro (`Mac17,5`, 6
+cores), macOS 27.2, rustc 1.99.0 for every revision, each
+revision's own release profile (`lto = true`, `opt-level = "z"`).
+The machine was heavily loaded (1-minute load average 337 to 441
+during the runs), so absolute times are about 15× the June figures
+and only the ratios carry information. Median Criterion point
+estimate of `escape_heavy/staticweaver` over the three rounds:
+
+| Revision | Median | vs v0.0.2 | vs Askama, same run (per round) |
+| :--- | ---: | ---: | :--- |
+| v0.0.2 (`askama_escape`) | 360 µs | 1.00× | 0.99, 0.99, 0.99 |
+| `4f7469d` (scalar `char_indices`) | 1,475 µs | 4.09× | 4.18, 3.63, 5.53 |
+| `19f6be9` (dependency dropped) | 1,544 µs | 4.28× | 3.31, 4.45, 4.86 |
+| v0.0.3 (byte-indexed, #33) | 540 µs | 1.50× | 1.23, 1.48, 1.33 |
+| `209dd2e` (v0.0.10, `main`) | 592 µs | 1.64× | 1.81, 1.54, 1.30 |
+
+Every round shows `4f7469d` at least 3.3× slower than v0.0.2, so
+"unchanged in noise" does not hold. Under this load the run does not
+pin the exact factor (3.4× in #33 against about 4× here), nor the
+v0.0.3 recovery (12.5% in #33 against 23–48% here); the Askama
+column also compares against different Askama releases (0.12.1,
+0.15.6, 0.15.6, 0.16.0, 0.16.1 by row).
+
+Option 3 was never attempted. No commit on any branch adds
+`std::arch`, `core::arch`, `target_feature` or
+`is_x86_feature_detected` (`git log --all -S`, checked 2026-11-07 at
+`209dd2e`), the CHANGELOG mentions SIMD only for v0.0.2 and its
+removal, and no issue or pull request proposes it beyond #33 and
+#34. ADR-001 constrains it.
 
 ## Consequences
 
