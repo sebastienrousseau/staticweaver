@@ -66,11 +66,13 @@ jobs:
   # Miri — undefined-behaviour interpreter (issue #42). Even with
   # `#![forbid(unsafe_code)]` at the crate root, Miri catches UB
   # introduced by derive-macro output (thiserror) and transitive deps
-  # (fnv, tempfile). Allowed-to-fail for v0.0.4; hard gate from v0.0.5.
+  # (fnv, tempfile). A hard gate: the job was meant to become one in
+  # v0.0.5 but kept `continue-on-error` until v0.0.10, when its run on
+  # the release PR passed every library test of the workspace (308
+  # staticweaver, 86 staticweaver-core).
   miri:
     name: Miri (nightly, --lib)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust nightly + Miri
