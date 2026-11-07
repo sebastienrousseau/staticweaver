@@ -62,6 +62,7 @@ staticweaver = { version = "0.0.10", features = ["async-tokio", "tracing", "json
 | `tracing` | `tracing` | `#[tracing::instrument]` spans on `render_template` / `render_page` (`staticweaver.render_template`, `staticweaver.render_page`). |
 | `json` | `serde_json` | `{{ value \| json \| safe }}` filter. |
 | `remote-templates` | `reqwest` (`rustls-native-certs`, no OpenSSL) | `Engine::create_template_folder(Some(url))` HTTPS fetcher (loopback may use HTTP; 10 s timeout, 1 MiB body cap, `Content-Type` validation). |
+| `watch` | `notify` | `watch::WatchLoader`: wraps any loader, caches its templates, and drops the cache on debounced (200 ms default) file-change events; `subscribe()` delivers each batch. |
 | `axum-example` | `axum`, `tokio` | Compiles `crates/staticweaver/examples/axum.rs`. |
 
 The engine itself lives in [`staticweaver-core`](crates/staticweaver-core),
@@ -803,6 +804,7 @@ All examples live in `crates/staticweaver/examples/` and use the shared `support
 | `remote` | (feature-gated) `create_template_folder(Some(url))` against a local mock server. Run with `cargo run --example remote --features remote-templates`. |
 | `async_tokio` | (feature-gated) **v0.0.4** Async render via Tokio: `MemoryAsyncLoader`, `render_template_async`, `render_page_async`, `render_to_async` (AsyncWrite sink), and `Arc<Engine>` fan-out across tokio tasks. Run with `cargo run --example async_tokio --features async-tokio`. |
 | `axum` | (feature-gated) End-to-end Axum web-server integration: render-to-`String`, render-to-`Vec<u8>` via `render_to`, per-request context. Run with `cargo run --example axum --features axum-example`. |
+| `watch` | (feature-gated) `WatchLoader` + `Engine`: render, edit the template, wait for the debounced change, clear the render cache, render again. Run with `cargo run --example watch --features watch`. |
 | `wasi` | `staticweaver-core` in a WASI Preview 2 component: inheritance, filters and `#each` over an in-memory loader. Lives in `crates/staticweaver-core/examples/`. Build with `make wasi`, run with `wasmtime run target/wasm32-wasip2/release/examples/wasi.wasm` (run instructions and the Wasmtime version in the file header). |
 
 ---

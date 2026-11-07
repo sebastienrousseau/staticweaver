@@ -70,6 +70,12 @@ tracing = ["dep:tracing"]
 # render_page_async}. Runtime-agnostic at this layer.
 async = ["dep:staticweaver-async"]
 
+# WatchLoader (issue #52): wraps any TemplateLoader, caches its
+# templates and drops the cache when files under a watched directory
+# change. Pulls `notify` (CC0-1.0); events are debounced, 200 ms by
+# default.
+watch = ["dep:notify"]
+
 # Default async impl: TokioFsLoader backed by tokio::fs, plus
 # Engine::render_to_async / render_page_to_async (AsyncWrite sinks).
 async-tokio = ["async", "staticweaver-async/tokio", "dep:tokio"]
@@ -94,6 +100,9 @@ tokio = { version = "1", default-features = false, features = ["rt-multi-thread"
 # tempfile is used to create temporary directories for the remote-template
 # fetcher.
 tempfile = { version = "3.13", optional = true }
+
+# notify: filesystem change events for the `watch` feature.
+notify = { version = "8", optional = true }
 
 # tracing: gated behind the `tracing` feature.
 tracing = { version = "0.1", default-features = false, features = ["std", "attributes"], optional = true }
@@ -162,6 +171,13 @@ path = "examples/remote.rs"
 name = "axum"
 path = "examples/axum.rs"
 required-features = ["axum-example"]
+
+[[example]]
+# WatchLoader + Engine: re-render when a template changes (issue #52).
+#   cargo run --example watch --features watch
+name = "watch"
+path = "examples/watch.rs"
+required-features = ["watch"]
 
 [[example]]
 # Async render via Tokio (issues #37 + #38). Demonstrates

@@ -43,6 +43,13 @@ mod transport;
 #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
 pub use staticweaver_async as loader_async;
 
+/// Filesystem-watching loader (issue #52). Gated behind the `watch`
+/// feature: [`watch::WatchLoader`] wraps any loader, caches its
+/// templates, and invalidates them on debounced change events.
+#[cfg(feature = "watch")]
+#[cfg_attr(docsrs, doc(cfg(feature = "watch")))]
+pub mod watch;
+
 pub use context::Context;
 pub use engine::Engine;
 pub use error::{EngineError, TemplateError};

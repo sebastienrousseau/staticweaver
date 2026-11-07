@@ -69,6 +69,17 @@ called out explicitly below).
   header documents running it with Wasmtime 48.0.2, the version it
   was run with. The README carries a WASI Preview 2 badge backed by
   that CI job.
+- **`WatchLoader`** (#52, feature `watch`, pulls `notify` 8):
+  `staticweaver::watch::WatchLoader` wraps any `TemplateLoader`,
+  caches what it loads, and drops the cache when files under a
+  watched directory change. Events are debounced (`DEFAULT_DEBOUNCE`,
+  200 ms; `WatchLoader::with_debounce` sets another window); access
+  events are ignored so reading a template does not trigger a reload.
+  `subscribe()` delivers each batch of changed paths, so a host can
+  call `Engine::clear_cache()` and re-render; `invalidate()` and
+  `generation()` cover manual use. Example: `examples/watch.rs`. The
+  debounce logic is tested with synthetic events; two tests marked
+  OS-dependent exercise the real platform watcher with 20 s timeouts.
 
 ## [0.0.9] - 2026-11-07
 
