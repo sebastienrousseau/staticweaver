@@ -31,7 +31,7 @@ mod template_error_tests {
         // guaranteed to fail on every platform, so this never matches a
         // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://nonexistent.invalid./")
+            reqwest::blocking::get("https://nonexistent.invalid./")
                 .unwrap_err();
         let template_error = TemplateError::Reqwest(reqwest_error);
         assert!(matches!(template_error, TemplateError::Reqwest(_)));
@@ -83,7 +83,7 @@ mod template_error_tests {
         // guaranteed to fail on every platform, so this never matches a
         // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://nonexistent.invalid./")
+            reqwest::blocking::get("https://nonexistent.invalid./")
                 .unwrap_err();
         let template_error = TemplateError::Reqwest(reqwest_error);
         assert!(
@@ -116,7 +116,7 @@ mod additional_template_error_tests {
         // guaranteed to fail on every platform, so this never matches a
         // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://nonexistent.invalid./")
+            reqwest::blocking::get("https://nonexistent.invalid./")
                 .unwrap_err();
         let template_error = TemplateError::from(reqwest_error);
         assert!(matches!(template_error, TemplateError::Reqwest(_)));
@@ -159,7 +159,7 @@ mod additional_template_error_tests {
         // guaranteed to fail on every platform, so this never matches a
         // real service on the developer's machine.
         let reqwest_error =
-            reqwest::blocking::get("http://nonexistent.invalid./")
+            reqwest::blocking::get("https://nonexistent.invalid./")
                 .unwrap_err();
 
         let io_template_error = TemplateError::from(io_error);

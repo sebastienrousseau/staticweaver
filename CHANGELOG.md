@@ -46,6 +46,12 @@ called out explicitly below).
   `\x` and `a\..\b` are accepted as literal file names instead of
   refused. Symlinks inside the template root are still followed.
 
+### CI
+
+- Test fixtures that only need a failing request now use `https://`
+  URLs, clearing five CodeQL `rust/non-https-url` alerts raised on test
+  code; the fetcher's own HTTPS rule is unchanged.
+
 ## [0.0.8] - 2026-11-01
 
 ### Security

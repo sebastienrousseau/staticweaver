@@ -8526,7 +8526,7 @@ mod tests {
     fn test_create_template_folder_empty_files_errors() {
         let engine = Engine::new("t", Duration::from_secs(60));
         let result = engine.create_template_folder_with_files(
-            Some("http://example.com"),
+            Some("https://example.com"),
             &[],
         );
         #[cfg(feature = "remote-templates")]
