@@ -37,8 +37,10 @@ euxis-commons = { version = "0.0.9", default-features = false, features = ["path
 serde_json = { version = "1", default-features = false, features = ["alloc"], optional = true }
 reqwest = { version = "0.13", default-features = false, optional = true }
 
-[dev-dependencies]
-# Property tests over the private parser helpers.
+# Property tests over the private parser helpers. Not on wasm, so
+# `cargo build --example wasi --target wasm32-wasip2` builds (proptest's
+# wait-timeout dependency does not support it).
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 proptest = "1"
 
 [package.metadata.docs.rs]

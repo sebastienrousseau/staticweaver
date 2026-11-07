@@ -40,6 +40,13 @@ nostd: ## Build staticweaver-core for no_std + alloc targets.
 	@cargo build -p staticweaver-core --no-default-features --target wasm32-wasip2
 	@cargo build -p staticweaver-core --no-default-features --features json --target wasm32-wasip2
 
+# WASI Preview 2 example (issue #50): build only. Run the artifact with
+# `wasmtime run target/wasm32-wasip2/release/examples/wasi.wasm`.
+.PHONY: wasi
+wasi: ## Build the WASI Preview 2 example component.
+	@rustup target add wasm32-wasip2
+	@cargo build -p staticweaver-core --example wasi --target wasm32-wasip2 --release
+
 # Line-coverage report via cargo-llvm-cov. Installs the binary if
 # missing; fails the build if overall line coverage drops below 95%.
 .PHONY: coverage

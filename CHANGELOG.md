@@ -62,6 +62,13 @@ called out explicitly below).
   `Engine::render_to` remains the `std::io::Write` shim. `make nostd`
   and a CI job build it for `thumbv7em-none-eabihf` and
   `wasm32-wasip2`, with and without the `json` feature.
+- **WASI Preview 2 example** (#50):
+  `crates/staticweaver-core/examples/wasi.rs` renders an inheritance
+  chain with filters and `#each` from an in-memory loader inside a
+  `wasm32-wasip2` component. `make wasi` and a CI job build it; the
+  header documents running it with Wasmtime 48.0.2, the version it
+  was run with. The README carries a WASI Preview 2 badge backed by
+  that CI job.
 
 ## [0.0.9] - 2026-11-07
 
