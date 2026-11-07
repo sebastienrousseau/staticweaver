@@ -507,6 +507,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "euxis-commons"
+version = "0.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fc280f4abcbbb3b453818482c3689639cab5e2a29e827ad8d2d712cf133f3ee"
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1760,11 +1766,12 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "staticweaver"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "askama",
  "axum",
  "criterion",
+ "euxis-commons",
  "fnv",
  "minijinja",
  "mockito",

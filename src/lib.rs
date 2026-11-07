@@ -31,6 +31,10 @@ pub mod error;
 /// [`engine::Engine::render_page`] to memoise rendered pages.
 pub mod cache;
 
+/// HTTPS-only transport policy for the remote-template fetcher.
+#[cfg(feature = "remote-templates")]
+mod transport;
+
 /// Async template-loading surface (issue #37). Gated behind the
 /// `async` feature so default builds stay sync-only. Exposes the
 /// [`loader_async::AsyncTemplateLoader`] trait and a reference

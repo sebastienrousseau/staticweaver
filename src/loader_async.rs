@@ -149,7 +149,8 @@ impl AsyncTemplateLoader for TokioFsLoader {
         &self,
         name: &str,
     ) -> Result<Cow<'_, str>, EngineError> {
-        let path = self.root.join(name);
+        let path =
+            crate::engine::resolve_template_path(&self.root, name)?;
         let bytes =
             tokio::fs::read(&path).await.map_err(EngineError::Io)?;
         let text = String::from_utf8(bytes).map_err(|e| {

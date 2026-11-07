@@ -43,7 +43,7 @@
 
 ```toml
 [dependencies]
-staticweaver = "0.0.8"
+staticweaver = "0.0.9"
 ```
 
 ### Optional features
@@ -52,7 +52,7 @@ All optional integrations are off by default. Enable only what the application n
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.8", features = ["async-tokio", "tracing", "json"] }
+staticweaver = { version = "0.0.9", features = ["async-tokio", "tracing", "json"] }
 ```
 
 | Feature | Pulls in | Adds |
@@ -61,7 +61,7 @@ staticweaver = { version = "0.0.8", features = ["async-tokio", "tracing", "json"
 | `async-tokio` | `tokio` (`rt-multi-thread`, `fs`) | `TokioFsLoader` non-blocking impl; `AsyncWrite` sinks. Implies `async`. |
 | `tracing` | `tracing` | `#[tracing::instrument]` spans on `render_template` / `render_page` (`staticweaver.render_template`, `staticweaver.render_page`). |
 | `json` | `serde_json` | `{{ value \| json \| safe }}` filter. |
-| `remote-templates` | `reqwest` (`rustls-native-certs`, no OpenSSL) | `Engine::create_template_folder(Some(url))` HTTP fetcher (10 s timeout, 1 MiB body cap, `Content-Type` validation). |
+| `remote-templates` | `reqwest` (`rustls-native-certs`, no OpenSSL) | `Engine::create_template_folder(Some(url))` HTTPS fetcher (loopback may use HTTP; 10 s timeout, 1 MiB body cap, `Content-Type` validation). |
 | `axum-example` | `axum`, `tokio` | Compiles `examples/axum.rs`. |
 
 ### Build from source
@@ -288,7 +288,7 @@ A bare path like `{{#if user}}` keeps its truthiness semantics — it evaluates 
 | **In-template assignment** | `{{#set name = LITERAL}}` binds locally without leaking to the parent scope. |
 | **Delimiters** | `set_delimiters(open, close)` swaps `{{` / `}}` for any pair. Whitespace around keys is trimmed. Whitespace control via `{{- key -}}`. Backslash-escape via `\{{literal}}`. |
 | **Cache** | Generic `Cache<K, V>` with time-based expiration and an optional hard capacity. **True LRU eviction** on overflow — `Cache::get` (`&mut self`) bumps access recency. Methods: `insert`, `get`, `ttl`, `refresh`, `update`, `remove`, `contains_key`, `remove_expired`, `clear`, `iter`, `IntoIterator`. **Observability**: `CacheStats { inserts, hits, misses, evictions, ttl_expired }` via `Cache::stats()` for cheap export to prometheus / metrics / opentelemetry without forcing a dep choice. On the `Engine` the cache lives behind `std::sync::Mutex` so `render_page` can take `&self`. |
-| **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-native-certs`. The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
+| **Remote templates** | `create_template_folder(Some(url))` under `--features remote-templates`. 10 s timeout, 1 MiB body cap, status-code check, `Content-Type` validation, `rustls-native-certs`. HTTPS only (plain `http://` is accepted for loopback hosts alone, and never via a redirect). The default-URL fallback has been removed; `create_template_folder(None)` is an error. |
 | **Errors** | `EngineError` (`Io`, `Render`, `InvalidTemplate`, `Template`, `ResourceNotFound`, `Timeout`, and `Reqwest` under the feature). All user-facing messages carry `at line N, column M` for source positions. `TemplateError` with `#[from]` conversions for `io::Error` and `reqwest::Error`. |
 | **CLI** | `cargo install staticweaver` ships a `staticweaver` binary: `staticweaver render <template> [--set k=v ...] [--no-escape]`. Reads templates from a file path or stdin (`-`). |
 | **Robustness** | proptest harness (256 random cases × 9 properties = ~2300 inputs per `cargo test`) proving the engine never panics on arbitrary input. Differential tests against Minijinja anchor the shared-syntax contract. Three nightly libfuzzer targets (`parse`, `escape`, `dot_path`) cover the bytes proptest misses. Two `#[cfg(kani)]` formal proofs against `escape_html_into` (idempotency + no bare metachars). |
@@ -362,7 +362,7 @@ ctx.set("title".to_string(), "About".to_string());
 let _result = engine.render_page(&ctx, "layout");
 ```
 
-`render_page` rejects layout names containing `/`, `\`, null bytes, or a `..` segment before touching the filesystem, so `render_page(&ctx, "../../etc/passwd")` returns `EngineError::InvalidTemplate` rather than reading outside the template directory.
+Layout, `extends` and partial names must resolve inside the template directory: absolute or drive-prefixed names, null bytes, and `..` steps that climb above the root are refused before touching the filesystem, so `render_page(&ctx, "../../etc/passwd")` returns `EngineError::InvalidTemplate` rather than reading outside it. `FsLoader` and `TokioFsLoader` apply the same rule when called directly. Symlinks inside the template directory are followed.
 
 </details>
 
@@ -533,7 +533,7 @@ Bounded caches use **true LRU eviction**: when a new key would push the cache pa
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.8", features = ["remote-templates"] }
+staticweaver = { version = "0.0.9", features = ["remote-templates"] }
 ```
 
 ```rust,ignore
@@ -558,7 +558,7 @@ Without the feature, `create_template_folder(Some(url))` returns `EngineError::I
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.8", features = ["json"] }
+staticweaver = { version = "0.0.9", features = ["json"] }
 ```
 
 ```rust,ignore
@@ -622,7 +622,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 <details>
 <summary><b>Async rendering with the <code>async-tokio</code> feature (v0.0.4)</b></summary>
 
-Requires `staticweaver = { version = "0.0.8", features = ["async-tokio"] }`.
+Requires `staticweaver = { version = "0.0.9", features = ["async-tokio"] }`.
 
 ```rust,ignore
 use staticweaver::loader_async::MemoryAsyncLoader;
@@ -666,7 +666,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 <details>
 <summary><b><code>tracing</code> spans on the render hot path</b></summary>
 
-Requires `staticweaver = { version = "0.0.8", features = ["tracing"] }`.
+Requires `staticweaver = { version = "0.0.9", features = ["tracing"] }`.
 
 ```rust,ignore
 use staticweaver::{Context, Engine};
@@ -865,8 +865,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 
 - `#![forbid(unsafe_code)]` across the entire codebase
 - HTML escape on by default for `render_template` / `render_page` substitutions (5-character OWASP set: `& < > " '`)
-- `render_page` layout names validated before any filesystem call (rejects `..`, `/`, `\`, null bytes)
-- Remote template fetching gated behind an opt-in `remote-templates` cargo feature; default build has no networking
+- Template names validated before any filesystem call (refuses absolute or prefixed names, null bytes, and `..` that climbs above the template root)
+- Remote template fetching gated behind an opt-in `remote-templates` cargo feature; default build has no networking; HTTPS required (HTTP only to loopback, redirects included)
 - 10 s timeout and 1 MiB body cap on every remote fetch
 - `Content-Type` validation on remote fetches — rejects non-textual MIME types
 - No default third-party URL — `create_template_folder(None)` is an error, not a silent download
@@ -905,7 +905,7 @@ The realistic differentiator: staticweaver is the only Rust template engine that
 
 `v0.0.3` is the latest release on crates.io. It builds on the `v0.0.2` cycle (which moved the engine beyond Mustache-tier substitution) with HTML-escape idempotency, opt-in lax mode, a collision-safe `Context::hash()`, a re-tuned escape fast path, and the full Dependabot backlog drained (including RUSTSEC-2026-0185 remediation). It's tested with **480+ tests** (lib, integration, snapshot, differential vs Minijinja, property-based via proptest, lax-mode matrix), **98% line-coverage floor enforced in CI**, **100% rustdoc example coverage compile-time-enforced** (`missing_docs = "deny"`), and a **comparative bench matrix** vs Tera/Minijinja/Askama. Cross-platform CI runs on Linux, macOS, and Windows. `#![forbid(unsafe_code)]` is enforced at the crate root.
 
-That said, it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.8"`) if you want to control upgrades manually.
+That said, it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.9"`) if you want to control upgrades manually.
 
 </details>
 

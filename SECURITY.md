@@ -65,8 +65,10 @@ Out of scope:
 - HTML escape for every context substitution in `render_template` and
   `render_page`. Opt-out is explicit (`{{!key}}` per tag or
   `.with_html_escape(false)` globally).
-- Path validation on `render_page(layout)` — rejects `/`, `\`, `..`, and
-  null bytes before any filesystem call.
+- Template names (layouts, `extends` bases, partials, and names passed
+  to `FsLoader` / `TokioFsLoader`) must resolve inside the template
+  root: absolute or drive-prefixed names, null bytes, and `..` steps
+  that climb above the root are refused before any filesystem call.
 - Remote template fetching is gated behind the non-default
   `remote-templates` cargo feature.
 - When `remote-templates` is enabled: 10 s request timeout, 1 MiB body

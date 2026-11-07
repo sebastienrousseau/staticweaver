@@ -48,12 +48,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Release preflight
         # The tag must match Cargo.toml and every version-bearing file.
         run: ./scripts/release-preflight.sh "${GITHUB_REF_NAME}"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: release-verify-${{ matrix.os }}
           save-if: false
@@ -81,15 +81,15 @@ jobs:
       # short-lived publish token. Without it the auth step fails.
       id-token: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       # Trusted publishing: swaps this job's GitHub OIDC identity for a
       # temporary crates.io token, revoked by the action's post step when
       # the job ends. Needs a trusted publisher on crates.io for the
       # staticweaver crate (repo + release.yml).
       - name: Authenticate with crates.io
         id: auth
-        uses: rust-lang/crates-io-auth-action@v1
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1
       - name: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
@@ -109,11 +109,11 @@ jobs:
       contents: write   # gh release upload
       id-token: write   # cosign keyless OIDC against the Sigstore Fulcio CA
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Extract version from tag
         id: ver
@@ -145,7 +145,7 @@ jobs:
         # though Publish to crates.io had already succeeded.
         run: cargo package --no-verify --allow-dirty
 
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Sign .crate via Sigstore (keyless OIDC)
         run: |
@@ -164,7 +164,7 @@ jobs:
           # The Release may not exist yet (created post-publish by the
           # maintainer's finalize-vX.Y.Z.sh). Wait briefly, otherwise
           # create it ourselves so artifacts always have a home.
-          for i in 1 2 3 4 5; do
+          for _ in 1 2 3 4 5; do
             if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
               break
             fi
@@ -172,7 +172,7 @@ jobs:
           done
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" \
-              --title "$GITHUB_REF_NAME" \
+              --title "staticweaver ${GITHUB_REF_NAME#v}" \
               --generate-notes
           fi
           gh release upload "$GITHUB_REF_NAME" \

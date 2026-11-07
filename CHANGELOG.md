@@ -10,6 +10,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 (pre-`1.0.0`, breaking changes may occur in minor/patch releases and are
 called out explicitly below).
 
+## [Unreleased]
+
+## [0.0.9] - 2026-11-07
+
+### Security
+
+- **Remote templates are fetched over HTTPS only.** With the
+  `remote-templates` feature, `create_template_folder` now rejects an
+  `http://` URL unless its host is loopback (`localhost`, `127.0.0.0/8`,
+  `::1`), and refuses any redirect hop that would fall back to
+  cleartext HTTP on another host. Templates are rendered into the site,
+  so a cleartext fetch let anyone on the network path rewrite them.
+  Callers that passed a plain `http://` URL to a remote host get
+  `EngineError::InvalidTemplate` and must switch to `https://`.
+- **Template names cannot leave the template root through any loader.**
+  `FsLoader::load` and `TokioFsLoader::load` joined the name onto their
+  root unchecked, so a direct call such as `loader.load("../secret")`
+  read a file outside it, and `Engine::render_template_async` passed
+  its name to the loader without the check `render_page` applies. Both
+  loaders and `render_template_async` now refuse such names with
+  `EngineError::InvalidTemplate("invalid template or partial name:
+  ...")`, the error the engine already returned. On Windows a name with
+  a drive or share prefix (`C:\x`, `C:x`, `\\server\share`) is now
+  refused too; it used to replace the root.
+
+### Changed
+
+- **One containment rule for template names**, from the `path` module
+  of `euxis-commons` 0.0.9 (new dependency, no transitive
+  dependencies). It is lexical: `.` is dropped and `..` removes the
+  previous component, so a name is refused only if it is absolute,
+  prefixed, contains a null byte, resolves to the root itself, or
+  climbs above the root. Differences from the old check: a `..` that
+  stays inside the root (`blog/../post`) is now accepted and resolves
+  to `post`; on Unix a backslash is an ordinary filename character, so
+  `\x` and `a\..\b` are accepted as literal file names instead of
+  refused. Symlinks inside the template root are still followed.
+
+### CI
+
+- **Least-privilege workflow token**: `ci.yml` now grants
+  `contents: read` at the top level; only `osv-scanner` widens it
+  (`security-events: write`). Clears seven CodeQL
+  `actions/missing-workflow-permissions` alerts.
+- **Every third-party action is pinned by commit SHA**, with the tag
+  or branch kept as a comment for Dependabot (the remaining item of
+  #51).
+- **Release page title**: when the release workflow has to create the
+  GitHub Release itself, it titles it `staticweaver <version>` instead
+  of the bare tag.
+- Test fixtures that only need a failing request now use `https://`
+  URLs, clearing five CodeQL `rust/non-https-url` alerts raised on test
+  code; the fetcher's own HTTPS rule is unchanged.
+
 ## [0.0.8] - 2026-11-01
 
 ### Security

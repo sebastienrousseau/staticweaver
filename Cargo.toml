@@ -5,7 +5,7 @@
 [package]
 # General project metadata
 name = "staticweaver"                       # The name of the library
-version = "0.0.8"                           # Current version of the crate (in-development)
+version = "0.0.9"                           # Current version of the crate (in-development)
 authors = ["StaticWeaver Contributors"]     # Library contributors
 edition = "2021"                            # Rust edition being used
 rust-version = "1.89"                       # MSRV: one floor shared with the maintainer's other Rust crates (raised from 1.75 in v0.0.8). The optional `async` feature's AFIT `AsyncTemplateLoader` alone needs 1.75.
@@ -138,6 +138,10 @@ proptest = "1"
 # Required dependencies for building and running the project.
 
 fnv = "1.0"                                 # Fast non-cryptographic hash function
+
+# euxis-commons `path`: the maintainer's shared rule for joining an
+# untrusted template name under the template root (no dependencies).
+euxis-commons = { version = "0.0.9", default-features = false, features = ["path"] }
 
 # reqwest powers the optional remote-template fetcher. Gated behind the
 # `remote-templates` feature so the core crate has no networking code in

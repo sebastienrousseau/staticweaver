@@ -85,7 +85,7 @@ use crate::context::Context;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -261,7 +261,8 @@ impl FsLoader {
 
 impl TemplateLoader for FsLoader {
     fn load(&self, name: &str) -> Result<String, EngineError> {
-        let path = self.root.join(format!("{name}.html"));
+        let path =
+            resolve_template_path(&self.root, &format!("{name}.html"))?;
         Ok(fs::read_to_string(&path)?)
     }
 }
@@ -364,7 +365,7 @@ enum FlowSignal {
 const MAX_RENDER_DEPTH: usize = 10;
 
 #[cfg(feature = "remote-templates")]
-use std::{fs::File, path::Path};
+use std::fs::File;
 
 /// Canonical engine error type. Re-exported from `crate::error` to keep a
 /// single source of truth; callers can use either `staticweaver::EngineError`
@@ -1909,6 +1910,7 @@ impl Engine {
                             .to_string(),
                     ));
                 }
+                crate::transport::require_permitted(path)?;
                 let dir = Self::download_files_from_url(path, files)?;
                 return dir.to_str().map(str::to_string).ok_or_else(
                     || {
@@ -1986,7 +1988,9 @@ impl Engine {
         let file_url = format!("{url}/{file}");
         let file_path = dir.join(file);
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::blocking::Client::builder()
+            .redirect(crate::transport::redirect_policy())
+            .build()?;
         let response = client
             .get(&file_url)
             .timeout(Duration::from_secs(10))
@@ -2090,6 +2094,7 @@ impl Engine {
     where
         L: crate::loader_async::AsyncTemplateLoader,
     {
+        validate_path(name)?;
         let body = loader.load(name).await?;
         self.render_template(&body, context)
     }
@@ -2275,22 +2280,39 @@ fn is_url(path: &str) -> bool {
     path.starts_with("http://") || path.starts_with("https://")
 }
 
+/// The error every refused template or partial name produces.
+fn invalid_name(path: &str) -> EngineError {
+    EngineError::InvalidTemplate(format!(
+        "invalid template or partial name: {path:?}"
+    ))
+}
+
+/// Joins the untrusted template name `name` under `root`, refusing a
+/// name that is absolute, carries a Windows drive or share prefix, or
+/// whose `..` steps climb above `root`. The rule is
+/// [`commons::path::safe_join`]: lexical, so `.` is dropped, `..`
+/// removes the previous component, and names such as `a..b` are
+/// ordinary. Symlinks inside `root` are followed as before.
+pub(crate) fn resolve_template_path(
+    root: &Path,
+    name: &str,
+) -> Result<PathBuf, EngineError> {
+    if name.contains('\0') {
+        return Err(invalid_name(name));
+    }
+    commons::path::safe_join(root, name).map_err(|_| invalid_name(name))
+}
+
 /// Validates that a template or partial name is safe and does not
 /// attempt to escape the template directory.
 ///
-/// Allows alphanumeric characters, hyphens, underscores, and forward
-/// slashes (for subdirectories). Rejects absolute paths, null bytes,
-/// and `..` segments.
+/// Rejects names that are empty or resolve to the root itself (`.`,
+/// `blog/..`), contain a null byte, are absolute or prefixed, or climb
+/// above the root (see [`resolve_template_path`]).
 fn validate_path(path: &str) -> Result<(), EngineError> {
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.starts_with('\\')
-        || path.contains('\0')
-        || path.split(['/', '\\']).any(|seg| seg == "..")
-    {
-        return Err(EngineError::InvalidTemplate(format!(
-            "invalid template or partial name: {path:?}"
-        )));
+    let resolved = resolve_template_path(Path::new(""), path)?;
+    if resolved.as_os_str().is_empty() {
+        return Err(invalid_name(path));
     }
     Ok(())
 }
@@ -8460,9 +8482,14 @@ mod tests {
     fn test_validate_path_cases() {
         assert!(validate_path("").is_err());
         assert!(validate_path("/absolute").is_err());
-        assert!(validate_path("\\absolute").is_err());
+        // A leading backslash is a root on Windows, a filename
+        // character elsewhere.
+        assert_eq!(validate_path("\\absolute").is_err(), cfg!(windows));
         assert!(validate_path("null\0char").is_err());
-        assert!(validate_path("blog/../etc/passwd").is_err());
+        // `..` is refused only when it climbs above the root.
+        assert!(validate_path("blog/../etc/passwd").is_ok());
+        assert!(validate_path("blog/../../etc/passwd").is_err());
+        assert!(validate_path("blog/..").is_err());
         assert!(validate_path("blog/post").is_ok());
     }
 
@@ -8499,7 +8526,7 @@ mod tests {
     fn test_create_template_folder_empty_files_errors() {
         let engine = Engine::new("t", Duration::from_secs(60));
         let result = engine.create_template_folder_with_files(
-            Some("http://example.com"),
+            Some("https://example.com"),
             &[],
         );
         #[cfg(feature = "remote-templates")]
