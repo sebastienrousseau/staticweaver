@@ -139,6 +139,10 @@ proptest = "1"
 
 fnv = "1.0"                                 # Fast non-cryptographic hash function
 
+# euxis-commons `path`: the maintainer's shared rule for joining an
+# untrusted template name under the template root (no dependencies).
+euxis-commons = { version = "0.0.9", default-features = false, features = ["path"] }
+
 # reqwest powers the optional remote-template fetcher. Gated behind the
 # `remote-templates` feature so the core crate has no networking code in
 # its default build. rustls + native-roots avoids pulling OpenSSL.

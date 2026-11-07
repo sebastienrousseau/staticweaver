@@ -22,6 +22,29 @@ called out explicitly below).
   so a cleartext fetch let anyone on the network path rewrite them.
   Callers that passed a plain `http://` URL to a remote host get
   `EngineError::InvalidTemplate` and must switch to `https://`.
+- **Template names cannot leave the template root through any loader.**
+  `FsLoader::load` and `TokioFsLoader::load` joined the name onto their
+  root unchecked, so a direct call such as `loader.load("../secret")`
+  read a file outside it, and `Engine::render_template_async` passed
+  its name to the loader without the check `render_page` applies. Both
+  loaders and `render_template_async` now refuse such names with
+  `EngineError::InvalidTemplate("invalid template or partial name:
+  ...")`, the error the engine already returned. On Windows a name with
+  a drive or share prefix (`C:\x`, `C:x`, `\\server\share`) is now
+  refused too; it used to replace the root.
+
+### Changed
+
+- **One containment rule for template names**, from the `path` module
+  of `euxis-commons` 0.0.9 (new dependency, no transitive
+  dependencies). It is lexical: `.` is dropped and `..` removes the
+  previous component, so a name is refused only if it is absolute,
+  prefixed, contains a null byte, resolves to the root itself, or
+  climbs above the root. Differences from the old check: a `..` that
+  stays inside the root (`blog/../post`) is now accepted and resolves
+  to `post`; on Unix a backslash is an ordinary filename character, so
+  `\x` and `a\..\b` are accepted as literal file names instead of
+  refused. Symlinks inside the template root are still followed.
 
 ## [0.0.8] - 2026-11-01
 

@@ -171,3 +171,36 @@ async fn arc_engine_concurrent_async_renders() {
         );
     }
 }
+
+#[tokio::test]
+async fn tokio_fs_loader_refuses_names_outside_its_root() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("root");
+    tokio::fs::create_dir(&root).await.unwrap();
+    tokio::fs::write(dir.path().join("secret"), "SECRET")
+        .await
+        .unwrap();
+    let loader = TokioFsLoader::new(&root);
+    let engine = shared_engine();
+
+    for name in ["../secret", "/etc/passwd"] {
+        let loaded = loader.load(name).await;
+        assert!(
+            matches!(
+                loaded,
+                Err(staticweaver::EngineError::InvalidTemplate(_))
+            ),
+            "load {name:?}: {loaded:?}"
+        );
+        let rendered = engine
+            .render_template_async(&loader, name, &Context::new())
+            .await;
+        assert!(
+            matches!(
+                rendered,
+                Err(staticweaver::EngineError::InvalidTemplate(_))
+            ),
+            "render_template_async {name:?}: {rendered:?}"
+        );
+    }
+}
