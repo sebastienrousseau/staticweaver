@@ -48,6 +48,16 @@ called out explicitly below).
 
 ### CI
 
+- **Least-privilege workflow token**: `ci.yml` now grants
+  `contents: read` at the top level; only `osv-scanner` widens it
+  (`security-events: write`). Clears seven CodeQL
+  `actions/missing-workflow-permissions` alerts.
+- **Every third-party action is pinned by commit SHA**, with the tag
+  or branch kept as a comment for Dependabot (the remaining item of
+  #51).
+- **Release page title**: when the release workflow has to create the
+  GitHub Release itself, it titles it `staticweaver <version>` instead
+  of the bare tag.
 - Test fixtures that only need a failing request now use `https://`
   URLs, clearing five CodeQL `rust/non-https-url` alerts raised on test
   code; the fetcher's own HTTPS rule is unchanged.
