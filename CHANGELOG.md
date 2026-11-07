@@ -12,6 +12,44 @@ called out explicitly below).
 
 ## [Unreleased]
 
+## [0.0.10]
+
+### Changed
+
+- **The repository is a Cargo workspace of four crates** (#48):
+  `staticweaver-core` (parser, expression evaluator, renderer, HTML
+  escape, `Value`, `Context`, errors), `staticweaver` (the std facade:
+  `Engine`, `FsLoader`, `MemoryLoader`, the render cache, remote
+  templates), `staticweaver-async` (`AsyncTemplateLoader`,
+  `MemoryAsyncLoader`, `TokioFsLoader`) and `staticweaver-cli` (the
+  `staticweaver` binary). `staticweaver` re-exports the core and async
+  types at their old paths (`staticweaver::context`,
+  `staticweaver::error`, `staticweaver::engine::{TemplateLoader,
+  FilterFn, TestFn}`, `staticweaver::loader_async`), so code written
+  against 0.0.9 compiles unchanged. Internal dependencies are pinned
+  to `=0.0.10`; the four crates release in lockstep.
+- **The CLI moved to its own crate.** `cargo install staticweaver` no
+  longer installs a binary; use `cargo install staticweaver-cli`. The
+  binary is still called `staticweaver` and takes the same arguments.
+- The render loop was split into one function per tag kind (`#if`,
+  `#each`, `#block`, partials, substitution, ...) as it moved into
+  `staticweaver-core`. Output and error messages are unchanged: the
+  integration, snapshot, differential and property tests moved with
+  their crate and pass unmodified, and the unit tests that called the
+  private `validate_path` helper now call its public successor
+  `validate_name`.
+
+### Added
+
+- `staticweaver_core::Renderer`, the borrowed-configuration renderer
+  `Engine` now delegates to, and `staticweaver_core::Registry`, the
+  name lookup for custom filters and tests.
+- `staticweaver_core::path::{validate_name, resolve_template_path}`:
+  the template-name containment rule, now public so the facade and
+  the async crate share one implementation.
+- `staticweaver::context::Map`: names the map type behind
+  `Value::Map` (`fnv::FnvHashMap<String, Value>`, as before).
+
 ## [0.0.9] - 2026-11-07
 
 ### Security

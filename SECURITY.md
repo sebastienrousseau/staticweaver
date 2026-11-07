@@ -84,8 +84,8 @@ Out of scope:
 - **Formal verification** (Kani, weekly): `escape_html_into` is proven
   idempotent (`escape(escape(x)) == escape(x)`) and proven to never
   emit a bare `<` or `>` over the symbolic horizon Kani can solve
-  (currently `[u8; 4]`). The proofs live inside `src/engine.rs` gated
-  by `#[cfg(kani)]`; run with `cargo kani`.
+  (currently `[u8; 4]`). The proofs live inside `crates/staticweaver-core/src/escape.rs` gated
+  by `#[cfg(kani)]`; run with `cargo kani -p staticweaver-core`.
 - **`missing_docs = "deny"`** — 100 % rustdoc coverage is a
   `cargo build` failure, not just a CI check.
 - All release commits are GPG-signed; `Assisted-by:` trailers track AI

@@ -39,7 +39,7 @@ If you have an idea for a new feature or improvement, we'd love to hear it. Here
 - Fork the repo.
 - Clone the [StaticWeaver][01] repo by running:
   `git clone https://github.com/sebastienrousseau/staticweaver.git`
-- Edit files in the `src/` folder. The `src/` folder contains the source code for `StaticWeaver`.
+- Edit files under `crates/`. The workspace has four crates: `staticweaver-core` (parser, renderer, escape, `Value`, errors; `no_std + alloc`), `staticweaver` (the std facade users depend on), `staticweaver-async` and `staticweaver-cli`. Run `make test` before you open a pull request.
 - Submit a pull request, and we'll review and merge your changes if they fit with our vision for `StaticWeaver`.
 
 #### Submitting Code
@@ -49,7 +49,7 @@ If you've identified a bug or have a specific code improvement in mind, we welco
 - Fork the repo.
 - Clone the `StaticWeaver` repo by running:
   `git clone https://github.com/sebastienrousseau/staticweaver.git`
-- Edit files in the `src/` folder. The `src/` folder contains the source code for `StaticWeaver`.
+- Edit files under `crates/`. The workspace has four crates: `staticweaver-core` (parser, renderer, escape, `Value`, errors; `no_std + alloc`), `staticweaver` (the std facade users depend on), `staticweaver-async` and `staticweaver-cli`. Run `make test` before you open a pull request.
 - Submit a pull request, and we'll review and merge your changes if they fit with our vision for `StaticWeaver`.
 
 We hope that this guide has been helpful in explaining how you can contribute to `StaticWeaver`. Thank you for your interest and involvement in our project!

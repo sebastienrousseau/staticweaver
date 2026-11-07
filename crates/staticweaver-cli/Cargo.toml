@@ -1,0 +1,35 @@
+[package]
+name = "staticweaver-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/staticweaver-cli"
+readme = "README.md"
+description = """
+The `staticweaver` command: render templates from the shell with the \
+staticweaver templating engine.
+"""
+categories = ["command-line-utilities", "template-engine"]
+keywords = ["cli", "template", "render", "html", "ssg"]
+
+# Hand-rolled arg parsing, no clap dep, so `cargo install
+# staticweaver-cli` produces a small binary named `staticweaver`.
+[[bin]]
+name = "staticweaver"
+path = "src/main.rs"
+# The library crate `staticweaver` documents under the same name.
+doc = false
+
+[dependencies]
+staticweaver = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.13"
+
+[lints]
+workspace = true
+

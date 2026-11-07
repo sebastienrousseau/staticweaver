@@ -42,9 +42,9 @@ coverage:
 
 # Ignore generated / non-production paths from coverage entirely.
 ignore:
-  - "benches/**/*"
-  - "examples/**/*"
-  - "tests/**/*"
+  - "crates/*/benches/**/*"
+  - "crates/*/examples/**/*"
+  - "crates/*/tests/**/*"
 
 comment:
   layout: "diff, flags, files"

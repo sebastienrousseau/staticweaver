@@ -6,7 +6,7 @@
 //! This module defines custom error types used throughout the library,
 //! providing detailed error information and context for various failure scenarios.
 
-use std::io;
+use alloc::string::String;
 use thiserror::Error;
 
 /// Represents high-level errors that can occur during the operation of the engine.
@@ -18,7 +18,7 @@ use thiserror::Error;
 /// # Examples
 ///
 /// ```
-/// use staticweaver::EngineError;
+/// use staticweaver_core::EngineError;
 ///
 /// let err = EngineError::Render("missing key".to_string());
 /// assert_eq!(err.to_string(), "Render error: missing key");
@@ -26,9 +26,12 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum EngineError {
-    /// I/O error encountered during engine operations.
+    /// I/O error encountered during engine operations. Only available
+    /// with the `std` feature (the default).
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     #[error("I/O error: {0}")]
-    Io(#[from] io::Error),
+    Io(#[from] std::io::Error),
 
     /// Network request error. Only available when the `remote-templates`
     /// feature is enabled.
@@ -66,7 +69,7 @@ pub enum EngineError {
 /// # Examples
 ///
 /// ```
-/// use staticweaver::TemplateError;
+/// use staticweaver_core::TemplateError;
 ///
 /// let err = TemplateError::MissingVariable("name".to_string());
 /// assert_eq!(err.to_string(), "Missing variable: name");
@@ -74,9 +77,12 @@ pub enum EngineError {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum TemplateError {
-    /// I/O error encountered during template operations.
+    /// I/O error encountered during template operations. Only
+    /// available with the `std` feature (the default).
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     #[error("I/O error: {0}")]
-    Io(#[from] io::Error),
+    Io(#[from] std::io::Error),
 
     /// Network request error. Only available when the `remote-templates`
     /// feature is enabled.
@@ -110,8 +116,8 @@ pub enum TemplateError {
 /// # Examples
 ///
 /// ```
-/// use staticweaver::error::Result;
-/// use staticweaver::EngineError;
+/// use staticweaver_core::error::Result;
+/// use staticweaver_core::EngineError;
 ///
 /// fn check(input: &str) -> Result<usize> {
 ///     if input.is_empty() {
@@ -124,11 +130,12 @@ pub enum TemplateError {
 /// assert_eq!(check("hello").unwrap(), 5);
 /// assert!(check("").is_err());
 /// ```
-pub type Result<T> = std::result::Result<T, EngineError>;
+pub type Result<T> = core::result::Result<T, EngineError>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
 
     #[test]
     fn test_engine_error_display() {

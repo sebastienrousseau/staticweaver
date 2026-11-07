@@ -1,0 +1,38 @@
+[package]
+name = "staticweaver-async"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/staticweaver-async"
+readme = "README.md"
+description = """
+Async template loading for the staticweaver templating engine: the \
+AsyncTemplateLoader trait, an in-memory loader and an optional Tokio \
+filesystem loader.
+"""
+categories = ["template-engine", "asynchronous", "web-programming"]
+keywords = ["template", "async", "tokio", "loader", "html"]
+
+[features]
+default = []
+# TokioFsLoader, backed by tokio::fs.
+tokio = ["dep:tokio"]
+
+[dependencies]
+staticweaver-core = { workspace = true, features = ["std"] }
+tokio = { version = "1", default-features = false, features = ["fs"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "fs"] }
+tempfile = "3.13"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true

@@ -8,10 +8,38 @@
 //! `Number`, `String`, `List`, and `Map` variants, and the engine resolves
 //! dot-separated lookups (`{{user.name}}`) by walking a `Value::Map`.
 
-use fnv::FnvHashMap;
-use std::collections::hash_map::DefaultHasher;
-use std::fmt;
-use std::hash::{Hash, Hasher};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
+use core::fmt;
+use core::hash::{Hash, Hasher};
+
+/// The map behind [`Value::Map`] and [`Context`].
+///
+/// With the `std` feature (the default) this is `fnv::FnvHashMap`, the
+/// type every release before the workspace split used. Without `std`
+/// it is `alloc::collections::BTreeMap`. Like `serde_json::Map`, the
+/// concrete type therefore depends on a feature: code that must build
+/// both ways should construct maps with `Map::default()` and use only
+/// the methods both types share (`insert`, `get`, `iter`, `len`, ...).
+///
+/// # Examples
+///
+/// ```
+/// use staticweaver_core::context::{Map, Value};
+///
+/// let mut m = Map::default();
+/// let _ = m.insert("k".to_string(), Value::from(1));
+/// assert_eq!(Value::Map(m).get_path("k"), Some(&Value::Number(1)));
+/// ```
+#[cfg(feature = "std")]
+pub type Map = fnv::FnvHashMap<String, Value>;
+
+/// The map behind [`Value::Map`] and [`Context`] (`BTreeMap` without
+/// the `std` feature).
+#[cfg(not(feature = "std"))]
+pub type Map = alloc::collections::BTreeMap<String, Value>;
 
 /// A polymorphic context value.
 ///
@@ -23,7 +51,7 @@ use std::hash::{Hash, Hasher};
 /// # Examples
 ///
 /// ```
-/// use staticweaver::context::Value;
+/// use staticweaver_core::context::Value;
 ///
 /// let v = Value::Number(42);
 /// assert_eq!(v.to_string(), "42");
@@ -49,7 +77,7 @@ pub enum Value {
     /// Ordered sequence of values. Addressable by `0`, `1`, ...
     List(Vec<Value>),
     /// Nested map of named values. Addressable by key.
-    Map(FnvHashMap<String, Value>),
+    Map(Map),
 }
 
 impl Value {
@@ -63,7 +91,7 @@ impl Value {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::context::Value;
+    /// use staticweaver_core::context::Value;
     /// use fnv::FnvHashMap;
     ///
     /// let mut inner = FnvHashMap::default();
@@ -100,7 +128,7 @@ impl Value {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::context::Value;
+    /// use staticweaver_core::context::Value;
     ///
     /// assert!(!Value::Null.is_truthy());
     /// assert!(!Value::Bool(false).is_truthy());
@@ -127,7 +155,7 @@ impl Value {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::context::Value;
+    /// use staticweaver_core::context::Value;
     ///
     /// assert_eq!(Value::String("hi".to_string()).as_str(), Some("hi"));
     /// assert_eq!(Value::Number(42).as_str(), None);
@@ -248,7 +276,7 @@ fn hash_value<H: Hasher>(v: &Value, h: &mut H) {
 /// # Examples
 ///
 /// ```
-/// use staticweaver::Context;
+/// use staticweaver_core::Context;
 ///
 /// let mut context = Context::new();
 /// context.set("name".to_string(), "Alice".to_string());
@@ -256,7 +284,7 @@ fn hash_value<H: Hasher>(v: &Value, h: &mut H) {
 /// ```
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Context {
-    elements: FnvHashMap<String, Value>,
+    elements: Map,
 }
 
 impl Context {
@@ -265,7 +293,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let context = Context::new();
     /// assert!(context.is_empty());
@@ -280,7 +308,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let context = Context::with_capacity(10);
     /// assert!(context.is_empty());
@@ -288,12 +316,18 @@ impl Context {
     /// ```
     #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            elements: FnvHashMap::with_capacity_and_hasher(
-                capacity,
-                fnv::FnvBuildHasher::default(),
-            ),
-        }
+        #[cfg(feature = "std")]
+        let elements = Map::with_capacity_and_hasher(
+            capacity,
+            fnv::FnvBuildHasher::default(),
+        );
+        // `BTreeMap` has no capacity; the hint is ignored without `std`.
+        #[cfg(not(feature = "std"))]
+        let elements = {
+            let _ = capacity;
+            Map::new()
+        };
+        Self { elements }
     }
 
     /// Stable, iteration-order-independent hash of every entry.
@@ -306,7 +340,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("key".to_string(), "value".to_string());
@@ -315,7 +349,11 @@ impl Context {
     /// ```
     #[must_use]
     pub fn hash(&self) -> u64 {
-        let mut h = DefaultHasher::new();
+        // SipHash (`DefaultHasher`) with `std`, FNV-1a without it.
+        #[cfg(feature = "std")]
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        #[cfg(not(feature = "std"))]
+        let mut h = fnv::FnvHasher::default();
         self.elements.len().hash(&mut h);
         let mut keys: Vec<&String> = self.elements.keys().collect();
         keys.sort_unstable();
@@ -332,7 +370,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("name".to_string(), "Alice".to_string());
@@ -348,7 +386,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::{Context, context::Value};
+    /// use staticweaver_core::{Context, context::Value};
     ///
     /// let mut ctx = Context::new();
     /// ctx.set_value("count".to_string(), 42);
@@ -372,7 +410,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut ctx = Context::new();
     /// // First call allocates the key; second call only overwrites the value.
@@ -393,7 +431,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut ctx = Context::new();
     /// ctx.set_value_string("greeting", "Hello");
@@ -425,7 +463,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut ctx = Context::new();
     /// // First call allocates the key; second only overwrites the value.
@@ -452,7 +490,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("name".to_string(), "Bob".to_string());
@@ -472,7 +510,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::{Context, context::Value};
+    /// use staticweaver_core::{Context, context::Value};
     ///
     /// let mut ctx = Context::new();
     /// ctx.set_value("count".to_string(), 7);
@@ -489,7 +527,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::{Context, context::Value};
+    /// use staticweaver_core::{Context, context::Value};
     /// use fnv::FnvHashMap;
     ///
     /// let mut user = FnvHashMap::default();
@@ -518,7 +556,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("name".to_string(), "Bob".to_string());
@@ -540,7 +578,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("name".to_string(), "Alice".to_string());
@@ -559,7 +597,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("key".to_string(), "value".to_string());
@@ -575,11 +613,12 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let context = Context::with_capacity(10);
     /// assert!(context.capacity() >= 10);
     /// ```
+    #[cfg(feature = "std")]
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.elements.capacity()
@@ -590,7 +629,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let context = Context::new();
     /// assert!(context.is_empty());
@@ -605,7 +644,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("k".to_string(), "v".to_string());
@@ -622,7 +661,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("key".to_string(), "value".to_string());
@@ -640,7 +679,7 @@ impl Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.set("key".to_string(), "old_value".to_string());
@@ -665,7 +704,7 @@ impl FromIterator<(String, String)> for Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let pairs = vec![
     ///     ("key1".to_string(), "value1".to_string()),
@@ -691,7 +730,7 @@ impl Extend<(String, String)> for Context {
     /// # Examples
     ///
     /// ```
-    /// use staticweaver::Context;
+    /// use staticweaver_core::Context;
     ///
     /// let mut context = Context::new();
     /// context.extend(vec![
@@ -714,6 +753,7 @@ impl Extend<(String, String)> for Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fnv::FnvHashMap;
 
     #[test]
     fn test_new_context() {
