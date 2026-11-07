@@ -79,21 +79,56 @@ pub(crate) fn serve<O: Write, E: Write>(
         .with_html_escape(!parsed.no_escape);
     let ctx = context_from(&parsed.sets);
 
-    render_once(&engine, path, &ctx, stdout, stderr);
+    let job = Job {
+        engine: &engine,
+        path,
+        ctx: &ctx,
+    };
+    job.render(stdout, stderr);
     let _ =
         writeln!(stderr, "watching {} (Ctrl-C to stop)", dir.display());
+    watch_loop(&job, &changes, stop, stdout, stderr);
+    let _ = writeln!(stderr, "stopped watching");
+    0
+}
+
+/// What one render needs: the engine, the template file, the context.
+struct Job<'a> {
+    engine: &'a Engine,
+    path: &'a Path,
+    ctx: &'a Context,
+}
+
+impl Job<'_> {
+    fn render<O: Write, E: Write>(
+        &self,
+        stdout: &mut O,
+        stderr: &mut E,
+    ) {
+        render_once(self.engine, self.path, self.ctx, stdout, stderr);
+    }
+}
+
+/// Re-renders on each change batch (clearing the render cache, whose
+/// pages embed partials) until `stop` fires or the change source
+/// hangs up.
+fn watch_loop<O: Write, E: Write>(
+    job: &Job<'_>,
+    changes: &Receiver<Vec<PathBuf>>,
+    stop: &Receiver<()>,
+    stdout: &mut O,
+    stderr: &mut E,
+) {
     while !stopped(stop) {
         match changes.recv_timeout(POLL) {
             Ok(_) => {
-                engine.clear_cache();
-                render_once(&engine, path, &ctx, stdout, stderr);
+                job.engine.clear_cache();
+                job.render(stdout, stderr);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-    let _ = writeln!(stderr, "stopped watching");
-    0
 }
 
 /// The template file; `--watch` cannot follow stdin.
@@ -231,6 +266,61 @@ mod tests {
             watch_root(Path::new("a/page.html")),
             PathBuf::from("a")
         );
+    }
+
+    /// Drives the loop with synthetic change batches (no OS watcher):
+    /// a batch re-renders the current file contents, a quiet period
+    /// times out and keeps waiting, and a hung-up source ends it.
+    #[test]
+    fn the_loop_rerenders_on_each_batch_until_the_source_hangs_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("page.html");
+        std::fs::write(&file, "v1 {{name}}").unwrap();
+        let engine = Engine::new("", Duration::from_secs(60));
+        let ctx =
+            context_from(&[("name".to_string(), "Ada".to_string())]);
+        let job = Job {
+            engine: &engine,
+            path: &file,
+            ctx: &ctx,
+        };
+        let (tx, changes) = mpsc::channel();
+        let (_stop_tx, stop) = mpsc::channel::<()>();
+        std::fs::write(&file, "v2 {{name}}").unwrap();
+        tx.send(vec![file.clone()]).unwrap();
+        let sender = std::thread::spawn(move || {
+            // Longer than POLL, so the loop also takes the timeout arm.
+            std::thread::sleep(POLL * 3);
+            drop(tx);
+        });
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        watch_loop(&job, &changes, &stop, &mut out, &mut err);
+        sender.join().unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "v2 Ada\n");
+        assert!(err.is_empty());
+    }
+
+    /// `run` installs the process-wide Ctrl-C handler; ctrlc allows one
+    /// per process, so this is the only test that calls it. The first
+    /// call installs it and fails on the stdin template; the second
+    /// reports that the handler cannot be installed again.
+    #[test]
+    fn run_installs_the_handler_once() {
+        // First through the binary's own entry point, so `render
+        // --watch` is routed here.
+        let argv: Vec<String> = ["render", "-", "--watch"]
+            .iter()
+            .map(|a| (*a).to_string())
+            .collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code =
+            crate::run(argv, &mut std::io::empty(), &mut out, &mut err);
+        assert_eq!(code, 1);
+        assert!(String::from_utf8_lossy(&err).contains("not `-`"));
+        let mut err = Vec::new();
+        assert_eq!(run(&args(Some("-")), &mut out, &mut err), 1);
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.contains("installing the Ctrl-C handler"), "{err}");
     }
 
     #[test]
