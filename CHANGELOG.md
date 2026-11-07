@@ -12,7 +12,12 @@ called out explicitly below).
 
 ## [Unreleased]
 
-## [0.0.10]
+## [0.0.10] - 2026-11-07
+
+0.0.9 was tagged but never published: its release run was cancelled
+before the crates.io step, so there is no 0.0.9 on crates.io and no
+0.0.9 GitHub release. 0.0.10 is the next published version after
+0.0.8 and includes every change listed under 0.0.9 below.
 
 ### Changed
 
