@@ -30,6 +30,16 @@ test: ## Run tests for the project.
 	@echo "Running doctests (--all-features)..."
 	@cargo test --doc --all-features
 
+# no_std + alloc cross-compile gates for staticweaver-core (issue #49),
+# the same builds CI runs.
+.PHONY: nostd
+nostd: ## Build staticweaver-core for no_std + alloc targets.
+	@rustup target add thumbv7em-none-eabihf wasm32-wasip2
+	@cargo build -p staticweaver-core --no-default-features --target thumbv7em-none-eabihf
+	@cargo build -p staticweaver-core --no-default-features --features json --target thumbv7em-none-eabihf
+	@cargo build -p staticweaver-core --no-default-features --target wasm32-wasip2
+	@cargo build -p staticweaver-core --no-default-features --features json --target wasm32-wasip2
+
 # Line-coverage report via cargo-llvm-cov. Installs the binary if
 # missing; fails the build if overall line coverage drops below 95%.
 .PHONY: coverage

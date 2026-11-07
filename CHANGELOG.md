@@ -49,6 +49,19 @@ called out explicitly below).
   the async crate share one implementation.
 - `staticweaver::context::Map`: names the map type behind
   `Value::Map` (`fnv::FnvHashMap<String, Value>`, as before).
+- **`staticweaver-core` builds for `no_std + alloc`** (#49). With
+  `default-features = false` the crate is `#![no_std]`:
+  `context::Map` (and so `Value::Map` and `Context`) is a `BTreeMap`,
+  `EngineError::Io` / `TemplateError::Io` are absent, template names
+  are checked with a lexical rule over `/` and `\` that agrees with the
+  std rule on Unix-style names (tested), `Context::hash` uses FNV-1a,
+  and the `round` / `ceil` / `floor` filters use an exact
+  integer-truncation fallback (tested against `std`). Nothing in core
+  uses `std::time`; the TTL cache stays in the facade. Rendering into
+  a `core::fmt::Write` sink is `Renderer::render_to`; the facade's
+  `Engine::render_to` remains the `std::io::Write` shim. `make nostd`
+  and a CI job build it for `thumbv7em-none-eabihf` and
+  `wasm32-wasip2`, with and without the `json` feature.
 
 ## [0.0.9] - 2026-11-07
 

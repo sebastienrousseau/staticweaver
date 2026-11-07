@@ -64,6 +64,13 @@ staticweaver = { version = "0.0.10", features = ["async-tokio", "tracing", "json
 | `remote-templates` | `reqwest` (`rustls-native-certs`, no OpenSSL) | `Engine::create_template_folder(Some(url))` HTTPS fetcher (loopback may use HTTP; 10 s timeout, 1 MiB body cap, `Content-Type` validation). |
 | `axum-example` | `axum`, `tokio` | Compiles `crates/staticweaver/examples/axum.rs`. |
 
+The engine itself lives in [`staticweaver-core`](crates/staticweaver-core),
+which `staticweaver` re-exports. It builds for `no_std + alloc` targets
+(embedded, `wasm32`, edge runtimes) with
+`staticweaver-core = { version = "0.0.10", default-features = false }`;
+CI cross-compiles it for `thumbv7em-none-eabihf` and `wasm32-wasip2`
+(`make nostd` runs the same builds locally).
+
 ### Build from source
 
 ```bash
