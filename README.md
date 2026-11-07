@@ -904,9 +904,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commits and PR guidelines.
 | Rich Jinja2 feature set (macros, custom filters w/ Tera args, i18n hooks) | **Tera** |
 | Bytecode VM and the absolute fastest runtime engine for complex templates | **Minijinja** |
 | Mustache compatibility for porting templates between languages | **Handlebars** or **staticweaver** |
-| **Small (`#![forbid(unsafe_code)]`), Tera-style expressions + inheritance with `super()`, SIMD HTML escape, MSRV 1.89, networking is opt-in** | **staticweaver** |
+| **Small (`#![forbid(unsafe_code)]`), Tera-style expressions + inheritance with `super()`, idempotent byte-scan HTML escape, MSRV 1.89, networking is opt-in** | **staticweaver** |
 
-The realistic differentiator: staticweaver is the only Rust template engine that combines `#![forbid(unsafe_code)]` with full inheritance + `super()`, range iteration, custom filters/tests, pluggable loaders, and SIMD escape — and stays small enough (~5k LoC engine) to read in an afternoon.
+The realistic differentiator: staticweaver is the only Rust template engine that combines `#![forbid(unsafe_code)]` with full inheritance + `super()`, range iteration, custom filters/tests, pluggable loaders, and an idempotent HTML escape — and stays small enough (~5k LoC engine) to read in an afternoon.
 
 </details>
 

@@ -39,6 +39,19 @@ called out explicitly below).
   private `validate_path` helper now call its public successor
   `validate_name`.
 
+### Documentation
+
+- **Architecture Decision Records** (#54) under `adr/`, in MADR
+  format, indexed in `adr/README.md`: ADR-001 forbid `unsafe`,
+  ADR-002 reject a bytecode VM, ADR-003 sync by default with async
+  opt-in, ADR-004 the workspace split, ADR-005 SHA-pinned GitHub
+  Actions, ADR-006 drop `askama_escape`. Each cites the file, section
+  or commit its claims come from; reasons and measurements the
+  repository does not record are marked "maintainer to confirm".
+- The README no longer claims a SIMD HTML escape: the SIMD path left
+  with `askama_escape` in v0.0.3 (see `PERFORMANCE.md`); the escape
+  is an idempotent byte scan.
+
 ### Added
 
 - `staticweaver_core::Renderer`, the borrowed-configuration renderer
