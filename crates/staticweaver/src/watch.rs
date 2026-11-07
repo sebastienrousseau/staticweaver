@@ -3,14 +3,15 @@
 
 //! # Watching loader (issue #52)
 //!
-//! [`WatchLoader`] wraps any [`TemplateLoader`], caches what it loads,
+//! [`WatchLoader`](crate::watch::WatchLoader) wraps any
+//! [`TemplateLoader`](crate::engine::TemplateLoader), caches what it loads,
 //! and drops the cache when files under a watched directory change.
 //! Change events from the operating system (via `notify`) are
 //! debounced: a burst of events (an editor's save writes a temporary
 //! file, renames it, touches metadata) becomes one batch once no new
 //! event has arrived for the debounce window, 200 ms by default.
 //!
-//! Each batch also goes to every [`WatchLoader::subscribe`] receiver,
+//! Each batch also goes to every [`WatchLoader::subscribe`](crate::watch::WatchLoader::subscribe) receiver,
 //! so a host can clear its own caches (for example
 //! [`Engine::clear_cache`](crate::Engine::clear_cache), whose rendered
 //! pages embed partials) and re-render.
