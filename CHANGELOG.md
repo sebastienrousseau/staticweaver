@@ -12,6 +12,8 @@ called out explicitly below).
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-11-07
+
 ### Security
 
 - **Remote templates are fetched over HTTPS only.** With the
