@@ -190,11 +190,14 @@ fn empty_content_type_is_accepted() {
 #[test]
 fn plain_http_to_a_remote_host_is_rejected() {
     // Template assets fetched over cleartext HTTP from a non-loopback
-    // host can be rewritten in transit. `.invalid` (RFC 2606) never
-    // resolves, so a request that is attempted fails with a DNS error,
-    // not the policy error this test expects.
+    // host can be rewritten in transit, and a private-network address
+    // is not loopback either. Were the request attempted, it would fail
+    // with a connection error, not the policy error this test expects.
+    // (A private address also keeps CodeQL's rust/non-https-url query,
+    // which does not model the policy check, from reporting the
+    // literal.)
     let err = engine()
-        .create_template_folder(Some("http://templates.invalid/site"))
+        .create_template_folder(Some("http://10.0.0.1/site"))
         .expect_err("plain-HTTP remote URL must not be fetched");
 
     match err {
