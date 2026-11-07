@@ -224,7 +224,7 @@ Reproduce: `cargo bench --bench comparative` and `cargo bench --bench template_b
 
 | Metric | Value |
 | :--- | :--- |
-| **Source** | ~10.7k lines across 6 modules (engine, context, cache, error, loader_async, lib) |
+| **Source** | ~13.7k lines across 4 crates (`staticweaver-core`, `staticweaver`, `staticweaver-async`, `staticweaver-cli`), of which `staticweaver-core` is ~4.9k excluding unit tests |
 | **Test suite** | 610+ tests + 101 doctests + 1500 random proptest cases / run + 3 libfuzzer targets + 2 Kani proofs |
 | **Coverage** | 98% line-coverage floor enforced in CI / 100% rustdoc with examples (compile-time-enforced via `missing_docs = "deny"`) |
 | **Examples** | 12 branded examples (`hello`, `context`, `cache`, `engine`, `errors`, `remote`, `inheritance`, `filters`, `loaders`, `control_flow`, `async_tokio`, `axum`) |

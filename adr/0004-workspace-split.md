@@ -26,8 +26,12 @@ How should the code be divided so that the core can build without
    `staticweaver` (std facade), `staticweaver-async`,
    `staticweaver-cli` (the layout issue #48 prescribes).
 
-Option 1 is not discussed in the repository. Rationale for rejecting
-it not recorded; maintainer to confirm.
+Option 1 is not discussed as an alternative, but issue #48 states
+the objection to the single-crate layout it describes: it "blocks
+`no_std` and traps async behind cfg-gates", and the split is asked
+for "so each layer evolves independently" (#48, "Summary"). Keeping
+one crate behind a `std` feature would keep async and std behind
+those cfg-gates, which is the reason #48 gives for splitting.
 
 ## Decision Outcome
 

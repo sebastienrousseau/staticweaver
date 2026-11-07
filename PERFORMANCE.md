@@ -61,6 +61,8 @@ A full SIMD recovery (custom AVX2/NEON `<>&"'` mask with entity
 lookahead) is scoped for v0.0.4 if benchmarks justify the
 complexity. The v0.0.3 scalar path is the right cost/benefit for a
 patch release: ~50 LOC, no new dependency, idempotency guaranteed.
+(As of v0.0.10 the SIMD recovery has not been attempted; see
+[ADR-006](adr/0006-drop-askama-escape.md).)
 
 ## Phase D progression
 
@@ -117,9 +119,9 @@ churn.
 A compiled bytecode + interpreter (the path Minijinja takes) would
 likely close the remaining 2.5–3.5× gap on `#each` and `if_chain`
 workloads. It was scoped as Phase D Option 1 and explicitly
-rejected — the marginal gain (15–30% on hot workloads) doesn't
-justify ~1500 LoC of compiler + VM that breaks the "small" pillar
-in our positioning vs Tera and Minijinja. If you need bytecode-VM
+rejected: a compiler + VM, estimated (not measured) at ~1500 LoC,
+would break the "small" pillar (the core engine, ~4.9k lines) in our
+positioning vs Tera and Minijinja. If you need bytecode-VM
 performance, use Minijinja directly.
 
 ## How to run the benchmarks yourself

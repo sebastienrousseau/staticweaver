@@ -12,6 +12,45 @@ called out explicitly below).
 
 ## [Unreleased]
 
+## [0.0.11] - Unreleased
+
+### Changed
+
+- Release signing: each `.crate` is now signed into one Sigstore
+  bundle, `<crate>-<version>.crate.sigstore.json`, in place of the
+  separate `.crate.sig` and `.crate.cert` files. cosign 3 (installed
+  by `sigstore/cosign-installer` v4.1.3, from Dependabot #97)
+  deprecates the separate files. Verify with `cosign verify-blob
+  --bundle`.
+- CI: every `dtolnay/rust-toolchain` use pins the action's `master`
+  branch and names its channel in `toolchain:`. Dependabot #97 had
+  moved the `# stable` pins to the `nightly` branch SHA, which
+  installed nightly in the stable jobs and broke the wasm32-wasip2
+  build.
+
+### Documentation
+
+- ADRs: items marked "maintainer to confirm" are resolved where the
+  repository holds the evidence. ADR-006 now cites issue #33's
+  measurement of the 3.4× `escape_heavy` regression and a re-run of
+  `cargo bench --bench comparative` at v0.0.2, `4f7469d`, `19f6be9`,
+  v0.0.3 and v0.0.10, and records that the AVX2/NEON escape was
+  never attempted. ADR-004 cites #48 for not keeping one crate.
+  The rest are answered by the maintainer: ADR-001 records why
+  `forbid` (no inner `#[allow]` can opt out) and that `unsafe`, a
+  SIMD escape included, may only live in a separate audited crate
+  behind a feature flag, never in `staticweaver-core`; ADR-002 keeps
+  the measured 2.5–3.8× gap, marks the 15–30% and ~1500 LoC figures
+  as unmeasured estimates (the 15–30% claim leaves `PERFORMANCE.md`)
+  and measures the "small" pillar on the core crate (~4.9k lines);
+  ADR-005 names both threats SHA pinning stops. No item is left open.
+- README "Project metrics": the source size is now measured on the
+  four-crate workspace (~13.7k lines, `staticweaver-core` ~4.9k
+  without unit tests); the old figure named modules that no longer
+  exist.
+- `PERFORMANCE.md`: notes that the SIMD escape "scoped for v0.0.4"
+  has not been attempted.
+
 ## [0.0.10] - 2026-11-07
 
 0.0.9 was tagged but never published: its release run was cancelled
