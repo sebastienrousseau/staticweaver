@@ -20,7 +20,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.10"
+version = "0.0.11"
 authors = ["StaticWeaver Contributors"]
 edition = "2021"
 # MSRV: one floor shared with the maintainer's other Rust crates (raised
@@ -33,9 +33,9 @@ repository = "https://github.com/sebastienrousseau/staticweaver"
 # Internal crates are pinned to the exact workspace version so the four
 # crates always release in lockstep.
 [workspace.dependencies]
-staticweaver-core = { path = "crates/staticweaver-core", version = "=0.0.10", default-features = false }
-staticweaver-async = { path = "crates/staticweaver-async", version = "=0.0.10" }
-staticweaver = { path = "crates/staticweaver", version = "=0.0.10" }
+staticweaver-core = { path = "crates/staticweaver-core", version = "=0.0.11", default-features = false }
+staticweaver-async = { path = "crates/staticweaver-async", version = "=0.0.11" }
+staticweaver = { path = "crates/staticweaver", version = "=0.0.11" }
 
 # -----------------------------------------------------------------------------
 # Linting Configuration (shared by every member via `[lints] workspace = true`)

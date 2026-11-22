@@ -26,7 +26,7 @@ concurrency:
 jobs:
   ci:
     name: Rust CI
-    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@0e32d48f9ec5e8b684eb3fdd666c66e728eb9864 # main 2026-11-07
+    uses: sebastienrousseau/pipelines/.github/workflows/rust-ci.yml@3f9978aba68e59da1bd5a58d12fbaf142679fe5f # main 2026-11-07
     with:
       rust-version: 'stable'
       run-clippy: true
@@ -105,7 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Run OSV-Scanner
-        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+        uses: google/osv-scanner-action/osv-scanner-action@32d3cd482bdadfb38b186c0ad1b031902d55d932 # v2.7.1
         with:
           scan-args: |-
             --lockfile=./Cargo.lock
@@ -191,7 +191,7 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Rust nightly (for --show-coverage)
+      - name: Install Rust nightly (for --coverage)
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly
@@ -209,12 +209,14 @@ jobs:
 
       - name: Enforce 100% doc-example coverage
         # One gate per library crate of the workspace (issue #48).
+        # Nightly rustdoc renamed `--show-coverage` to `--coverage` in
+        # 2026-11; the old name now fails with "Unrecognized option".
         run: |
           set -euo pipefail
           for crate in staticweaver-core staticweaver-async staticweaver; do
             echo "::group::${crate}"
             output="$(cargo +nightly rustdoc -p "${crate}" --lib --all-features -- \
-              -Z unstable-options --show-coverage 2>&1 | tee /dev/stderr)"
+              -Z unstable-options --coverage 2>&1 | tee /dev/stderr)"
 
             # Nightlies from roughly 2026-08 write the coverage table to
             # target/doc/<crate>.txt and print only "Generated output into
