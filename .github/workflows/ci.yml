@@ -191,7 +191,7 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install Rust nightly (for --show-coverage)
+      - name: Install Rust nightly (for --coverage)
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: nightly
@@ -209,12 +209,14 @@ jobs:
 
       - name: Enforce 100% doc-example coverage
         # One gate per library crate of the workspace (issue #48).
+        # Nightly rustdoc renamed `--show-coverage` to `--coverage` in
+        # 2026-11; the old name now fails with "Unrecognized option".
         run: |
           set -euo pipefail
           for crate in staticweaver-core staticweaver-async staticweaver; do
             echo "::group::${crate}"
             output="$(cargo +nightly rustdoc -p "${crate}" --lib --all-features -- \
-              -Z unstable-options --show-coverage 2>&1 | tee /dev/stderr)"
+              -Z unstable-options --coverage 2>&1 | tee /dev/stderr)"
 
             # Nightlies from roughly 2026-08 write the coverage table to
             # target/doc/<crate>.txt and print only "Generated output into
