@@ -12,9 +12,24 @@ called out explicitly below).
 
 ## [Unreleased]
 
-## [0.0.11] - Unreleased
+## [0.0.11] - 2026-11-22
+
+### Security
+
+- `url` 2.5.9 (RUSTSEC-2026-0592, stack overflow in `Url::origin()`
+  on nested `blob:` URLs), `quinn-udp` 0.5.16 (RUSTSEC-2026-0538,
+  receive loop can spin after a truncated datagram) and `rustix`
+  1.1.6 (RUSTSEC-2026-0486, xattr functions on a zero-length buffer).
+  All three are transitive; only `Cargo.lock` changes.
 
 ### Changed
+
+- `minijinja` 3.1.0 and `notify` 8.2.2 (Dependabot #100); the shared
+  `rust-ci.yml` pipeline and `osv-scanner-action` 2.7.1 (Dependabot
+  #99).
+- CI: the doc-example coverage gate passes `--coverage` to nightly
+  rustdoc, which renamed `--show-coverage` and now rejects the old
+  name, failing the Docs job on every pull request.
 
 - Release signing: each `.crate` is now signed into one Sigstore
   bundle, `<crate>-<version>.crate.sigstore.json`, in place of the

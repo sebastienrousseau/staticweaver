@@ -44,7 +44,7 @@
 
 ```toml
 [dependencies]
-staticweaver = "0.0.10"
+staticweaver = "0.0.11"
 ```
 
 ### Optional features
@@ -53,7 +53,7 @@ All optional integrations are off by default. Enable only what the application n
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.10", features = ["async-tokio", "tracing", "json"] }
+staticweaver = { version = "0.0.11", features = ["async-tokio", "tracing", "json"] }
 ```
 
 | Feature | Pulls in | Adds |
@@ -69,7 +69,7 @@ staticweaver = { version = "0.0.10", features = ["async-tokio", "tracing", "json
 The engine itself lives in [`staticweaver-core`](crates/staticweaver-core),
 which `staticweaver` re-exports. It builds for `no_std + alloc` targets
 (embedded, `wasm32`, edge runtimes) with
-`staticweaver-core = { version = "0.0.10", default-features = false }`;
+`staticweaver-core = { version = "0.0.11", default-features = false }`;
 CI cross-compiles it for `thumbv7em-none-eabihf` and `wasm32-wasip2`
 (`make nostd` runs the same builds locally).
 
@@ -542,7 +542,7 @@ Bounded caches use **true LRU eviction**: when a new key would push the cache pa
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.10", features = ["remote-templates"] }
+staticweaver = { version = "0.0.11", features = ["remote-templates"] }
 ```
 
 ```rust,ignore
@@ -567,7 +567,7 @@ Without the feature, `create_template_folder(Some(url))` returns `EngineError::I
 
 ```toml
 [dependencies]
-staticweaver = { version = "0.0.10", features = ["json"] }
+staticweaver = { version = "0.0.11", features = ["json"] }
 ```
 
 ```rust,ignore
@@ -631,7 +631,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 <details>
 <summary><b>Async rendering with the <code>async-tokio</code> feature (v0.0.4)</b></summary>
 
-Requires `staticweaver = { version = "0.0.10", features = ["async-tokio"] }`.
+Requires `staticweaver = { version = "0.0.11", features = ["async-tokio"] }`.
 
 ```rust,ignore
 use staticweaver::loader_async::MemoryAsyncLoader;
@@ -675,7 +675,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 <details>
 <summary><b><code>tracing</code> spans on the render hot path</b></summary>
 
-Requires `staticweaver = { version = "0.0.10", features = ["tracing"] }`.
+Requires `staticweaver = { version = "0.0.11", features = ["tracing"] }`.
 
 ```rust,ignore
 use staticweaver::{Context, Engine};
@@ -916,7 +916,7 @@ The realistic differentiator: staticweaver is the only Rust template engine that
 
 `v0.0.3` is the latest release on crates.io. It builds on the `v0.0.2` cycle (which moved the engine beyond Mustache-tier substitution) with HTML-escape idempotency, opt-in lax mode, a collision-safe `Context::hash()`, a re-tuned escape fast path, and the full Dependabot backlog drained (including RUSTSEC-2026-0185 remediation). It's tested with **480+ tests** (lib, integration, snapshot, differential vs Minijinja, property-based via proptest, lax-mode matrix), **98% line-coverage floor enforced in CI**, **100% rustdoc example coverage compile-time-enforced** (`missing_docs = "deny"`), and a **comparative bench matrix** vs Tera/Minijinja/Askama. Cross-platform CI runs on Linux, macOS, and Windows. `#![forbid(unsafe_code)]` is enforced at the crate root.
 
-That said, it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.10"`) if you want to control upgrades manually.
+That said, it's still pre-1.0, so the API may change before v1. We document every breaking change in [`CHANGELOG.md`](CHANGELOG.md). Pin a precise version in your `Cargo.toml` (`staticweaver = "=0.0.11"`) if you want to control upgrades manually.
 
 </details>
 
