@@ -27,6 +27,7 @@ called out explicitly below).
 - `minijinja` 3.1.0 and `notify` 8.2.2 (Dependabot #100); the shared
   `rust-ci.yml` pipeline and `osv-scanner-action` 2.7.1 (Dependabot
   #99).
+- `ctrlc` 3.5.3 (Dependabot #102).
 - CI: the doc-example coverage gate passes `--coverage` to nightly
   rustdoc, which renamed `--show-coverage` and now rejects the old
   name, failing the Docs job on every pull request.
